@@ -72,7 +72,8 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 			continue;
 		}
 
-		const char *arg = (ai < argc && argv[ai]) ? argv[ai] : "";
+		int has_arg = (ai < argc && argv[ai]);
+		const char *arg = has_arg ? argv[ai] : "";
 		if (ai < argc) ai++;
 
 		if (f == 's') {
@@ -81,14 +82,16 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 			continue;
 		}
 		if (f == 'c') {
-			char out = arg[0] ? arg[0] : 0;
-			sb_i64 w = sb_write_all(1, &out, 1);
-			if (w < 0) sb_die_errno(argv0, "write", w);
+			if (arg[0]) {
+				char out = arg[0];
+				sb_i64 w = sb_write_all(1, &out, 1);
+				if (w < 0) sb_die_errno(argv0, "write", w);
+			}
 			continue;
 		}
 		if (f == 'd') {
 			sb_i64 v = 0;
-			if (sb_parse_i64_dec(arg, &v) != 0) {
+			if (arg[0] && sb_parse_i64_dec(arg, &v) != 0) {
 				sb_die_usage(argv0, "printf FORMAT [ARG...]");
 			}
 			sb_i64 w = sb_write_i64_dec(1, v);
@@ -97,7 +100,7 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 		}
 		if (f == 'u') {
 			sb_u64 v = 0;
-			if (sb_parse_u64_dec(arg, &v) != 0) {
+			if (arg[0] && sb_parse_u64_dec(arg, &v) != 0) {
 				sb_die_usage(argv0, "printf FORMAT [ARG...]");
 			}
 			sb_i64 w = sb_write_u64_dec(1, v);
@@ -106,7 +109,7 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 		}
 		if (f == 'x') {
 			sb_u64 v = 0;
-			if (sb_parse_u64_dec(arg, &v) != 0) {
+			if (arg[0] && sb_parse_u64_dec(arg, &v) != 0) {
 				sb_die_usage(argv0, "printf FORMAT [ARG...]");
 			}
 			write_hex_u64_noprefix(v);

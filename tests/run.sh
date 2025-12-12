@@ -8,6 +8,12 @@ fail() {
   exit 1
 }
 
+DBG=${SB_TEST_DEBUG:-0}
+mark() {
+  [ "$DBG" = "1" ] && echo "MARK: $*" >&2
+  return 0
+}
+
 # Create a private temp dir for each run
 TMP=${TMPDIR:-/tmp}/sysbox-tests-$$
 cleanup() { rm -rf "$TMP"; }
@@ -16,11 +22,16 @@ mkdir -p "$TMP"
 
 BIN="$ROOT_DIR/bin"
 
+mark "setup"
+
 [ -x "$BIN/rm" ] || fail "missing $BIN/rm (build first)"
 [ -x "$BIN/cp" ] || fail "missing $BIN/cp (build first)"
 [ -x "$BIN/mkdir" ] || fail "missing $BIN/mkdir (build first)"
 [ -x "$BIN/rmdir" ] || fail "missing $BIN/rmdir (build first)"
 [ -x "$BIN/echo" ] || fail "missing $BIN/echo (build first)"
+[ -x "$BIN/true" ] || fail "missing $BIN/true (build first)"
+[ -x "$BIN/false" ] || fail "missing $BIN/false (build first)"
+[ -x "$BIN/pwd" ] || fail "missing $BIN/pwd (build first)"
 [ -x "$BIN/head" ] || fail "missing $BIN/head (build first)"
 [ -x "$BIN/tail" ] || fail "missing $BIN/tail (build first)"
 [ -x "$BIN/sort" ] || fail "missing $BIN/sort (build first)"
@@ -32,11 +43,13 @@ BIN="$ROOT_DIR/bin"
 [ -x "$BIN/sleep" ] || fail "missing $BIN/sleep (build first)"
 [ -x "$BIN/ln" ] || fail "missing $BIN/ln (build first)"
 [ -x "$BIN/readlink" ] || fail "missing $BIN/readlink (build first)"
+[ -x "$BIN/realpath" ] || fail "missing $BIN/realpath (build first)"
 [ -x "$BIN/basename" ] || fail "missing $BIN/basename (build first)"
 [ -x "$BIN/dirname" ] || fail "missing $BIN/dirname (build first)"
 [ -x "$BIN/touch" ] || fail "missing $BIN/touch (build first)"
 [ -x "$BIN/chmod" ] || fail "missing $BIN/chmod (build first)"
 [ -x "$BIN/chown" ] || fail "missing $BIN/chown (build first)"
+[ -x "$BIN/mv" ] || fail "missing $BIN/mv (build first)"
 [ -x "$BIN/printf" ] || fail "missing $BIN/printf (build first)"
 [ -x "$BIN/yes" ] || fail "missing $BIN/yes (build first)"
 [ -x "$BIN/seq" ] || fail "missing $BIN/seq (build first)"
@@ -44,6 +57,49 @@ BIN="$ROOT_DIR/bin"
 [ -x "$BIN/stat" ] || fail "missing $BIN/stat (build first)"
 [ -x "$BIN/df" ] || fail "missing $BIN/df (build first)"
 [ -x "$BIN/ls" ] || fail "missing $BIN/ls (build first)"
+[ -x "$BIN/test" ] || fail "missing $BIN/test (build first)"
+[ -x "$BIN/[" ] || fail "missing $BIN/[ (build first)"
+[ -x "$BIN/grep" ] || fail "missing $BIN/grep (build first)"
+[ -x "$BIN/kill" ] || fail "missing $BIN/kill (build first)"
+[ -x "$BIN/id" ] || fail "missing $BIN/id (build first)"
+[ -x "$BIN/which" ] || fail "missing $BIN/which (build first)"
+[ -x "$BIN/xargs" ] || fail "missing $BIN/xargs (build first)"
+[ -x "$BIN/whoami" ] || fail "missing $BIN/whoami (build first)"
+
+# --- true/false: exit codes ---
+set +e
+$BIN/true >/dev/null 2>&1
+RC=$?
+[ $RC -eq 0 ] || fail "true should exit 0 (got $RC)"
+
+$BIN/false >/dev/null 2>&1
+RC=$?
+set -e
+[ $RC -eq 1 ] || fail "false should exit 1 (got $RC)"
+
+# --- pwd: should match shell pwd ---
+mark "pwd"
+OUT=$($BIN/pwd)
+[ "$OUT" = "$(pwd)" ] || fail "pwd mismatch (got '$OUT', exp '$(pwd)')"
+
+# --- echo: basic output and -n ---
+OUT=$($BIN/echo hello world)
+[ "$OUT" = "hello world" ] || fail "echo basic unexpected: '$OUT'"
+
+OUT=$($BIN/echo -n "no newline")
+[ "$OUT" = "no newline" ] || fail "echo -n unexpected: '$OUT'"
+
+# --- mv: rename file and directory ---
+printf 'x' >"$TMP/mv_src"
+$BIN/mv "$TMP/mv_src" "$TMP/mv_dst" || fail "mv file failed"
+[ ! -e "$TMP/mv_src" ] || fail "mv did not remove src"
+[ "$(cat "$TMP/mv_dst")" = "x" ] || fail "mv did not preserve file contents"
+
+mkdir -p "$TMP/mv_dir_src/sub"
+printf 'y' >"$TMP/mv_dir_src/sub/file"
+$BIN/mv "$TMP/mv_dir_src" "$TMP/mv_dir_dst" || fail "mv dir failed"
+[ ! -e "$TMP/mv_dir_src" ] || fail "mv dir did not remove src"
+[ "$(cat "$TMP/mv_dir_dst/sub/file")" = "y" ] || fail "mv dir did not preserve contents"
 
 # --- mkdir: -p creates parents, is idempotent, fails if a path component is a file ---
 NEST="$TMP/mkdirp/a/b/c"
@@ -148,6 +204,35 @@ OUT=$(printf 'x\n' | $BIN/cat -n)
 EXP=$(printf '1\tx\n')
 [ "$OUT" = "$EXP" ] || fail "cat -n (stdin) unexpected output: '$OUT'"
 
+# --- cat: multiple files and '-' means stdin ---
+printf 'A' >"$TMP/cat_a"
+printf 'B' >"$TMP/cat_b"
+OUT=$($BIN/cat "$TMP/cat_a" "$TMP/cat_b")
+[ "$OUT" = "AB" ] || fail "cat multiple files unexpected: '$OUT'"
+
+OUT=$(printf 'X' | $BIN/cat -)
+[ "$OUT" = "X" ] || fail "cat - (stdin) unexpected: '$OUT'"
+
+OUT=$(printf 'X' | $BIN/cat - "$TMP/cat_b")
+[ "$OUT" = "XB" ] || fail "cat stdin+file unexpected: '$OUT'"
+
+OUT=$(printf 'X' | $BIN/cat "$TMP/cat_a" -)
+[ "$OUT" = "AX" ] || fail "cat file+stdin unexpected: '$OUT'"
+
+# --- cat -n: line numbering continues across files ---
+printf 'a\n' >"$TMP/cat_n1"
+printf 'b\n' >"$TMP/cat_n2"
+OUT=$($BIN/cat -n "$TMP/cat_n1" "$TMP/cat_n2")
+EXP=$(printf '1\ta\n2\tb\n')
+[ "$OUT" = "$EXP" ] || fail "cat -n multi-file unexpected: '$OUT'"
+
+# --- cat -n: no newline means same line continues ---
+printf 'a' >"$TMP/cat_nonl1"
+printf 'b\n' >"$TMP/cat_nonl2"
+OUT=$($BIN/cat -n "$TMP/cat_nonl1" "$TMP/cat_nonl2")
+EXP=$(printf '1\tab\n')
+[ "$OUT" = "$EXP" ] || fail "cat -n across non-newline boundary unexpected: '$OUT'"
+
 # --- head/tail: basic -n behavior on stdin ---
 printf '1\n2\n3\n4\n5\n' >"$TMP/lines"
 OUT=$("$BIN/head" -n 2 <"$TMP/lines")
@@ -184,6 +269,7 @@ OUT=$(printf 'x y\n' | $BIN/wc -lw)
 [ "$OUT" = "1 2" ] || fail "wc -lw (stdin) unexpected output: '$OUT'"
 
 # --- head/tail: -c N bytes ---
+mark "head/tail"
 printf 'abcdef' >"$TMP/bytes"
 OUT=$("$BIN/head" -c 3 <"$TMP/bytes")
 [ "$OUT" = "abc" ] || fail "head -c 3 unexpected output"
@@ -195,6 +281,7 @@ OUT=$(printf 'abcdef' | "$BIN/tail" -c 3)
 [ "$OUT" = "def" ] || fail "tail -c 3 (pipe) unexpected output"
 
 # --- sort: in-memory, bytewise line sorting ---
+mark "sort"
 printf 'b\na\nc\n' >"$TMP/sort1"
 OUT=$("$BIN/sort" <"$TMP/sort1")
 [ "$OUT" = "a
@@ -216,6 +303,28 @@ printf 'a\n' >"$TMP/sort3b"
 OUT=$("$BIN/sort" "$TMP/sort3a" "$TMP/sort3b")
 [ "$OUT" = "a
 b" ] || fail "sort FILE FILE unexpected output"
+
+OUT=$(printf '' | "$BIN/sort")
+[ "$OUT" = "" ] || fail "sort empty input should produce empty output"
+
+OUT=$(printf 'x\n' | "$BIN/sort")
+[ "$OUT" = "x" ] || fail "sort single-line unexpected output: '$OUT'"
+
+# --- sort: input too large should fail (buffer cap is 4 MiB) ---
+# Use a sparse file when possible to keep tests fast.
+if command -v truncate >/dev/null 2>&1; then
+  truncate -s 4194305 "$TMP/sort_big"
+else
+  dd if=/dev/zero of="$TMP/sort_big" bs=4096 count=1025 >/dev/null 2>&1
+fi
+set +e
+"$BIN/sort" "$TMP/sort_big" >/dev/null 2>"$TMP/sort_big_err"
+RC=$?
+set -e
+[ $RC -ne 0 ] || fail "sort should fail on oversized input"
+[ -s "$TMP/sort_big_err" ] || fail "sort should report error on oversized input"
+
+mark "uniq/tee/tr/cut"
 
 # --- sort: -n numeric sort (leading integer) ---
 printf '2\n10\n1\n' >"$TMP/sortn1"
@@ -250,6 +359,13 @@ b" ] || fail "uniq -d unexpected output"
 OUT=$("$BIN/uniq" -u <"$TMP/uniq1")
 [ "$OUT" = "c" ] || fail "uniq -u unexpected output"
 
+# --- uniq: FILE operands and multiple files are treated as one stream ---
+printf 'a\na\n' >"$TMP/uniq_f1"
+printf 'a\nb\n' >"$TMP/uniq_f2"
+OUT=$("$BIN/uniq" "$TMP/uniq_f1" "$TMP/uniq_f2")
+[ "$OUT" = "a
+b" ] || fail "uniq FILE FILE unexpected output"
+
 # --- tee: fanout stdin to stdout + files ---
 printf 'hi\n' >"$TMP/tee_in"
 printf 'hi\n' >"$TMP/tee_expected"
@@ -258,11 +374,46 @@ cmp -s "$TMP/tee_expected" "$TMP/tee_out" || fail "tee stdout mismatch"
 cmp -s "$TMP/tee_expected" "$TMP/tee_a" || fail "tee file A mismatch"
 cmp -s "$TMP/tee_expected" "$TMP/tee_b" || fail "tee file B mismatch"
 
+# --- tee: -a appends instead of truncating ---
+printf 'old\n' >"$TMP/tee_append"
+printf 'new\n' | "$BIN/tee" -a "$TMP/tee_append" >"$TMP/tee_append_out" || fail "tee -a failed"
+[ "$(cat "$TMP/tee_append_out")" = "new" ] || fail "tee -a stdout mismatch"
+EXP=$(printf 'old\nnew\n')
+[ "$(cat "$TMP/tee_append")" = "$EXP" ] || fail "tee -a did not append"
+
+# --- tee: '-' operand means stdout (should not create a file named '-') ---
+OUT=$(cd "$TMP" && printf 'x\n' | "$BIN/tee" -)
+[ "$OUT" = "x" ] || fail "tee - unexpected output: '$OUT'"
+[ ! -e "$TMP/-" ] || fail "tee should not create a file named '-'"
+
+# --- tee: error on one output continues writing others (and exits 1) ---
+mkdir -p "$TMP/tee_dir"
+set +e
+printf 'hi\n' | "$BIN/tee" "$TMP/tee_ok" "$TMP/tee_dir" >"$TMP/tee_out2" 2>"$TMP/tee_err2"
+RC=$?
+set -e
+[ $RC -eq 1 ] || fail "tee should exit 1 when an output fails (got $RC)"
+[ "$(cat "$TMP/tee_out2")" = "hi" ] || fail "tee should still write to stdout on partial failure"
+cmp -s "$TMP/tee_expected" "$TMP/tee_ok" || fail "tee should still write to good file on partial failure"
+[ -s "$TMP/tee_err2" ] || fail "tee should report error on failing output"
+
 # --- tr: 1:1 bytewise translation ---
 printf 'abc\n' >"$TMP/tr_in"
 printf 'xyc\n' >"$TMP/tr_expected"
 "$BIN/tr" ab xy <"$TMP/tr_in" >"$TMP/tr_out" || fail "tr failed"
 cmp -s "$TMP/tr_expected" "$TMP/tr_out" || fail "tr output mismatch"
+
+set +e
+printf 'abc\n' | "$BIN/tr" ab x >/dev/null 2>&1
+RC=$?
+set -e
+[ $RC -eq 2 ] || fail "tr should usage-error on mismatched set lengths (got $RC)"
+
+set +e
+printf 'abc\n' | "$BIN/tr" "" "" >/dev/null 2>&1
+RC=$?
+set -e
+[ $RC -eq 2 ] || fail "tr should usage-error on empty sets (got $RC)"
 
 # --- cut: tab-delimited fields (-f) ---
 printf 'a\tb\tc\n1\t2\n' >"$TMP/cut_in"
@@ -274,7 +425,17 @@ printf 'a\tc\n1\n' >"$TMP/cut_expected2"
 "$BIN/cut" -f 1,3 <"$TMP/cut_in" >"$TMP/cut_out2" || fail "cut -f 1,3 failed"
 cmp -s "$TMP/cut_expected2" "$TMP/cut_out2" || fail "cut -f 1,3 mismatch"
 
+printf 'a\tb\n1\t2\n' >"$TMP/cut_expected3"
+"$BIN/cut" -f 1-2 <"$TMP/cut_in" >"$TMP/cut_out3" || fail "cut -f 1-2 failed"
+cmp -s "$TMP/cut_expected3" "$TMP/cut_out3" || fail "cut -f 1-2 mismatch"
+
+printf '\n\n' >"$TMP/cut_expected4"
+printf 'onlyone\n\n' >"$TMP/cut_in2"
+"$BIN/cut" -f 2 <"$TMP/cut_in2" >"$TMP/cut_out4" || fail "cut out-of-range field failed"
+cmp -s "$TMP/cut_expected4" "$TMP/cut_out4" || fail "cut out-of-range field mismatch"
+
 # --- date: epoch seconds (numeric) ---
+mark "date/sleep/kill/id/which"
 OUT=$($BIN/date)
 case "$OUT" in
   (""|*[!0-9]*) fail "date output not numeric: '$OUT'" ;;
@@ -283,7 +444,95 @@ esac
 # --- sleep: integer seconds ---
 $BIN/sleep 0 || fail "sleep 0 failed"
 
+set +e
+$BIN/sleep >/dev/null 2>&1
+RC=$?
+set -e
+[ $RC -eq 2 ] || fail "sleep should usage-error with no args (got $RC)"
+
+set +e
+$BIN/sleep nope >/dev/null 2>&1
+RC=$?
+set -e
+[ $RC -eq 2 ] || fail "sleep should usage-error on invalid seconds (got $RC)"
+
+# --- kill: send signals to a background process ---
+(
+  $BIN/sleep 2 &
+  PID=$!
+  $BIN/kill "$PID" || exit 1
+  set +e
+  wait "$PID"
+  WRC=$?
+  set -e
+  [ $WRC -ne 0 ] || exit 1
+) 2>/dev/null || fail "kill default (SIGTERM) failed"
+
+(
+  $BIN/sleep 2 &
+  PID=$!
+  $BIN/kill -9 "$PID" || exit 1
+  set +e
+  wait "$PID"
+  WRC=$?
+  set -e
+  [ $WRC -ne 0 ] || exit 1
+) 2>/dev/null || fail "kill -9 failed"
+
+OUT=$($BIN/kill -l | $BIN/head -n 1)
+case "$OUT" in
+  (""|*[!0-9]*) fail "kill -l output not numeric: '$OUT'" ;;
+esac
+
+# --- id: print uid/gid/groups ---
+U=$(id -u)
+G=$(id -g)
+GRP=$(id -G | tr ' ' ',')
+OUT=$($BIN/id)
+[ "$OUT" = "uid=$U gid=$G groups=$GRP" ] || fail "id unexpected output: '$OUT'"
+
+# --- whoami: minimal numeric uid ---
+OUT=$($BIN/whoami)
+[ "$OUT" = "$(id -u)" ] || fail "whoami unexpected output: '$OUT'"
+
+OUT=$($BIN/id -u)
+[ "$OUT" = "$U" ] || fail "id -u unexpected: '$OUT'"
+
+OUT=$($BIN/id -g)
+[ "$OUT" = "$G" ] || fail "id -g unexpected: '$OUT'"
+
+set +e
+$BIN/id extra >/dev/null 2>&1
+RC=$?
+set -e
+[ $RC -eq 2 ] || fail "id should reject operands (got $RC)"
+
+# --- which: locate executables in PATH ---
+WHBIN="$TMP/whichbin"
+mkdir -p "$WHBIN"
+ln -s "$BIN/echo" "$WHBIN/mycmd"
+
+OUT=$(PATH="$WHBIN" $BIN/which mycmd)
+[ "$OUT" = "$WHBIN/mycmd" ] || fail "which basic unexpected: '$OUT'"
+
+OUT=$($BIN/which "$BIN/echo")
+[ "$OUT" = "$BIN/echo" ] || fail "which /path unexpected: '$OUT'"
+
+mark "post-which"
+
+cp "$BIN/true" "$TMP/localcmd"
+$BIN/chmod 755 "$TMP/localcmd" || fail "chmod for which test failed"
+OUT=$(cd "$TMP" && PATH=":$WHBIN" $BIN/which localcmd)
+[ "$OUT" = "localcmd" ] || fail "which empty PATH segment unexpected: '$OUT'"
+
+set +e
+$BIN/which definitely_not_a_command >/dev/null 2>&1
+RC=$?
+set -e
+[ $RC -eq 1 ] || fail "which should exit 1 when not found (got $RC)"
+
 # --- ln: hard link ---
+mark "ln"
 printf 'hello' >"$TMP/ln_src"
 "$BIN/ln" "$TMP/ln_src" "$TMP/ln_dst" || fail "ln failed"
 [ "$(stat -c %i "$TMP/ln_src")" = "$(stat -c %i "$TMP/ln_dst")" ] || fail "ln did not create a hard link"
@@ -305,12 +554,16 @@ printf 'B' >"$TMP/ln_dst2"
 OUT=$($BIN/readlink "$TMP/ln_sym2")
 [ "$OUT" = "new" ] || fail "ln -sf produced wrong target: '$OUT'"
 
+mark "after-ln"
+
 # --- readlink: print symlink target ---
+mark "readlink"
 ln -s "targetfile" "$TMP/rl_symlink"
 OUT=$($BIN/readlink "$TMP/rl_symlink")
 [ "$OUT" = "targetfile" ] || fail "readlink unexpected output"
 
 # --- readlink: -f canonicalize (absolute path, resolve symlinks, normalize . and ..) ---
+mark "readlink -f"
 mkdir -p "$TMP/rlf/base/sub"
 printf 'z' >"$TMP/rlf/base/sub/file"
 
@@ -330,12 +583,25 @@ OUT=$($BIN/readlink -f "$TMP/rlf/base/./sub/../sub/file")
 
 ln -s "loop2" "$TMP/rlf/loop1"
 ln -s "loop1" "$TMP/rlf/loop2"
+mark "readlink -f loop"
 set +e
 $BIN/readlink -f "$TMP/rlf/loop1" >"$TMP/out" 2>"$TMP/err"
 RC=$?
 set -e
 [ $RC -ne 0 ] || fail "readlink -f should fail on symlink loop"
 [ -s "$TMP/err" ] || fail "readlink -f loop should print an error"
+
+mark "after-readlink"
+
+# --- realpath: same as readlink -f, via argv0 mode switch ---
+mark "realpath"
+OUT=$($BIN/realpath "$TMP/rlf/link2")
+[ "$OUT" = "$TMP/rlf/base/sub/file" ] || fail "realpath (symlink chain) unexpected output: '$OUT'"
+
+OUT=$(cd "$TMP/rlf" && $BIN/realpath -- base/sub/file)
+[ "$OUT" = "$TMP/rlf/base/sub/file" ] || fail "realpath (relative) unexpected output: '$OUT'"
+
+mark "after-realpath"
 
 # --- basename/dirname: pure string logic ---
 OUT=$($BIN/basename /a/b/c)
@@ -355,6 +621,8 @@ OUT=$($BIN/dirname c)
 
 OUT=$($BIN/dirname /)
 [ "$OUT" = "/" ] || fail "dirname / unexpected"
+
+mark "touch"
 
 # --- touch: create if missing; do not truncate if existing ---
 MISSING="$TMP/touch-missing"
@@ -378,11 +646,13 @@ GOT=$(stat -c %Y "$TFILE")
 # --- touch: without -t updates mtime to now ---
 TFILE2="$TMP/touch-now"
 printf 'x' >"$TFILE2"
+"$BIN/touch" -t 200001010000.00 "$TFILE2" || fail "touch -t (setup) failed"
 M1=$(stat -c %Y "$TFILE2")
-sleep 1
 "$BIN/touch" "$TFILE2" || fail "touch (update) failed"
 M2=$(stat -c %Y "$TFILE2")
-[ "$M2" -ge $((M1 + 1)) ] || fail "touch did not update mtime (m1 $M1, m2 $M2)"
+[ "$M2" -gt "$M1" ] || fail "touch did not update mtime (m1 $M1, m2 $M2)"
+
+mark "chmod/chown/printf"
 
 # --- chmod: numeric (octal) modes ---
 CHMOD_F="$TMP/chmod-file"
@@ -408,6 +678,8 @@ MODE=$(stat -c %a "$CHMOD_F")
 MODE=$(stat -c %a "$CHMOD_F")
 [ "$MODE" = "644" ] || fail "chmod u=rw,go=r expected 644 (got $MODE)"
 
+mark "after-chmod"
+
 # --- chown: numeric uid[:gid] (non-root expected to fail) ---
 CHOWN_F="$TMP/chown-file"
 printf 'y' >"$CHOWN_F"
@@ -418,12 +690,38 @@ set -e
 [ $RC -ne 0 ] || fail "chown unexpectedly succeeded (are tests running as root?)"
 [ -s "$TMP/err" ] || fail "chown should print an error when it fails"
 
+mark "after-chown"
+
 # --- printf: minimal format substitutions ---
 OUT=$($BIN/printf '%s %d\n' hi 3)
 [ "$OUT" = "hi 3" ] || fail "printf %s %d unexpected output: '$OUT'"
 
+OUT=$($BIN/printf '%u %x %c\n' 10 255 Z)
+[ "$OUT" = "10 ff Z" ] || fail "printf %u %x %c unexpected output: '$OUT'"
+
+OUT=$($BIN/printf 'a\tb\nX')
+EXP=$(printf 'a\tb\nX')
+[ "$OUT" = "$EXP" ] || fail "printf escapes unexpected output: '$OUT'"
+
+OUT=$($BIN/printf '\\X')
+[ "$OUT" = "\\X" ] || fail "printf \\\\ unexpected output: '$OUT'"
+
+OUT=$($BIN/printf '%d:%u:%x:%s:Z\n')
+[ "$OUT" = "0:0:0::Z" ] || fail "printf missing args unexpected output: '$OUT'"
+
+OUT=$($BIN/printf 'end\\')
+[ "$OUT" = "end\\" ] || fail "printf trailing backslash unexpected output: '$OUT'"
+
+set +e
+$BIN/printf '%d\n' notanumber >/dev/null 2>&1
+RC=$?
+set -e
+[ $RC -eq 2 ] || fail "printf should usage-error on invalid number (got $RC)"
+
 OUT=$($BIN/printf '%%\n')
 [ "$OUT" = "%" ] || fail "printf %% unexpected output: '$OUT'"
+
+mark "after-printf"
 
 # --- yes: repeat lines (bounded by head) ---
 OUT=$($BIN/yes x | $BIN/head -n 3)
@@ -431,7 +729,27 @@ OUT=$($BIN/yes x | $BIN/head -n 3)
 x
 x" ] || fail "yes unexpected output"
 
+mark "after-yes"
+
+# --- xargs: build command lines from stdin ---
+OUT=$(printf 'a b\nc\t d\n' | $BIN/xargs $BIN/echo)
+[ "$OUT" = "a b c d" ] || fail "xargs basic unexpected output: '$OUT'"
+
+OUT=$(printf '1 2 3\n' | $BIN/xargs -n 2 $BIN/echo)
+[ "$OUT" = "1 2
+3" ] || fail "xargs -n 2 unexpected output: '$OUT'"
+
+OUT=$(printf '' | $BIN/xargs $BIN/echo hi)
+[ "$OUT" = "" ] || fail "xargs should do nothing on empty input: '$OUT'"
+
+set +e
+$BIN/xargs >/dev/null 2>&1
+RC=$?
+set -e
+[ $RC -eq 2 ] || fail "xargs should usage-error with no CMD (got $RC)"
+
 # --- seq: integer sequences ---
+mark "seq"
 OUT=$($BIN/seq 3)
 [ "$OUT" = "1
 2
@@ -447,11 +765,29 @@ OUT=$($BIN/seq 5 -2 1)
 3
 1" ] || fail "seq 5 -2 1 unexpected"
 
+OUT=$($BIN/seq -3 -1)
+[ "$OUT" = "-3
+-2
+-1" ] || fail "seq -3 -1 unexpected"
+
+OUT=$($BIN/seq 1 1 1000 | $BIN/wc -l)
+[ "$OUT" = "1000" ] || fail "seq 1 1 1000 line count unexpected: '$OUT'"
+
+set +e
+$BIN/seq 1 0 2 >/dev/null 2>&1
+RC=$?
+set -e
+[ $RC -eq 2 ] || fail "seq should usage-error on zero increment (got $RC)"
+
+mark "after-seq"
+
 # --- uname: sysname ---
+mark "uname"
 OUT=$($BIN/uname)
 [ "$OUT" = "Linux" ] || fail "uname unexpected output: '$OUT'"
 
 # --- stat: size/perm output ---
+mark "stat"
 STAT_F="$TMP/stat-file"
 printf 'abc' >"$STAT_F"
 $BIN/chmod 600 "$STAT_F" || fail "chmod for stat test failed"
@@ -461,7 +797,32 @@ case "$OUT" in
   (*) fail "stat output missing perm/size: '$OUT'" ;;
 esac
 
+STAT_DIR="$TMP/stat-dir"
+mkdir -p "$STAT_DIR"
+OUT=$($BIN/stat "$STAT_DIR")
+case "$OUT" in
+  (*"type=dir"*) : ;;
+  (*) fail "stat dir should report type=dir: '$OUT'" ;;
+esac
+
+ln -s "$STAT_F" "$TMP/stat-link"
+OUT=$($BIN/stat "$TMP/stat-link")
+case "$OUT" in
+  (*"type=reg"*"size=3"*) : ;;
+  (*) fail "stat symlink should follow and report regular file: '$OUT'" ;;
+esac
+
+if command -v mkfifo >/dev/null 2>&1; then
+  mkfifo "$TMP/stat-fifo"
+  OUT=$($BIN/stat "$TMP/stat-fifo")
+  case "$OUT" in
+    (*"type=other"*) : ;;
+    (*) fail "stat fifo should report type=other: '$OUT'" ;;
+  esac
+fi
+
 # --- df: basic output exists and includes path ---
+mark "df"
 OUT=$($BIN/df "$TMP")
 set -- $OUT
 [ "$1" = "$TMP" ] || fail "df did not echo path as first field: '$OUT'"
@@ -469,17 +830,157 @@ case "$2" in (""|*[!0-9]*) fail "df total not numeric: '$OUT'" ;; esac
 case "$3" in (""|*[!0-9]*) fail "df used not numeric: '$OUT'" ;; esac
 case "$4" in (""|*[!0-9]*) fail "df avail not numeric: '$OUT'" ;; esac
 
+OUT=$($BIN/df)
+set -- $OUT
+[ "$1" = "." ] || fail "df default operand should be '.': '$OUT'"
+case "$2" in (""|*[!0-9]*) fail "df(.) total not numeric: '$OUT'" ;; esac
+case "$3" in (""|*[!0-9]*) fail "df(.) used not numeric: '$OUT'" ;; esac
+case "$4" in (""|*[!0-9]*) fail "df(.) avail not numeric: '$OUT'" ;; esac
+
+set +e
+$BIN/df "$TMP/does-not-exist" >"$TMP/out" 2>"$TMP/err"
+RC=$?
+set -e
+[ $RC -eq 1 ] || fail "df should exit 1 on missing path (got $RC)"
+[ -s "$TMP/err" ] || fail "df should print an error on missing path"
+
+mark "after-df"
+
+# --- test / [: condition evaluation ---
+TEST_DIR="$TMP/test_tool"
+mkdir -p "$TEST_DIR/dir"
+printf 'x' >"$TEST_DIR/file"
+
+$BIN/test -e "$TEST_DIR/file" || fail "test -e existing should be true"
+set +e
+$BIN/test -e "$TEST_DIR/missing" >/dev/null 2>&1
+RC=$?
+set -e
+[ $RC -eq 1 ] || fail "test -e missing should be false (got $RC)"
+
+$BIN/test -f "$TEST_DIR/file" || fail "test -f file should be true"
+set +e
+$BIN/test -f "$TEST_DIR/dir" >/dev/null 2>&1
+RC=$?
+set -e
+[ $RC -eq 1 ] || fail "test -f dir should be false (got $RC)"
+
+$BIN/test -d "$TEST_DIR/dir" || fail "test -d dir should be true"
+
+$BIN/test -z "" || fail "test -z empty should be true"
+set +e
+$BIN/test -n "" >/dev/null 2>&1
+RC=$?
+set -e
+[ $RC -eq 1 ] || fail "test -n empty should be false (got $RC)"
+$BIN/test -n "hi" || fail "test -n non-empty should be true"
+
+$BIN/test a = a || fail "test string '=' should be true"
+$BIN/test a != b || fail "test string '!=' should be true"
+
+$BIN/test 2 -eq 2 || fail "test -eq should be true"
+$BIN/test 2 -lt 3 || fail "test -lt should be true"
+
+"$BIN/[" -f "$TEST_DIR/file" "]" || fail "[ -f file ] should be true"
+set +e
+"$BIN/[" -f "$TEST_DIR/file" >/dev/null 2>&1
+RC=$?
+set -e
+[ $RC -eq 2 ] || fail "[ missing closing ] should be usage error (got $RC)"
+
+# --- grep: fixed-string pattern matching ---
+GREP_F="$TMP/grep_file"
+printf 'a\nFoo\nbar\nFOO\n' >"$GREP_F"
+
+OUT=$($BIN/grep Foo "$GREP_F")
+[ "$OUT" = "Foo" ] || fail "grep basic match unexpected: '$OUT'"
+
+OUT=$($BIN/grep -i foo "$GREP_F")
+[ "$OUT" = "Foo
+FOO" ] || fail "grep -i unexpected: '$OUT'"
+
+OUT=$($BIN/grep -v bar "$GREP_F")
+[ "$OUT" = "a
+Foo
+FOO" ] || fail "grep -v unexpected: '$OUT'"
+
+OUT=$($BIN/grep -c -i foo "$GREP_F")
+[ "$OUT" = "2" ] || fail "grep -c unexpected: '$OUT'"
+OUT=$($BIN/grep -n -i foo "$GREP_F")
+[ "$OUT" = "2:Foo
+4:FOO" ] || fail "grep -n unexpected: '$OUT'"
+
+OUT=$(printf 'xx\nneedle\nyy\n' | $BIN/grep needle)
+[ "$OUT" = "needle" ] || fail "grep stdin unexpected: '$OUT'"
+
+set +e
+$BIN/grep -q needle "$GREP_F" >/dev/null 2>&1
+RC=$?
+set -e
+[ $RC -eq 1 ] || fail "grep -q should be 1 when no match (got $RC)"
+
+set +e
+$BIN/grep -q -i foo "$GREP_F" >/dev/null 2>&1
+RC=$?
+set -e
+[ $RC -eq 0 ] || fail "grep -q should be 0 when match exists (got $RC)"
+
 # --- ls: -l long format and -h human size ---
 LSDIR="$TMP/ls_long"
 mkdir -p "$LSDIR"
 printf 'x' > "$LSDIR/f"
 mkdir -p "$LSDIR/sub"
+printf 'h' > "$LSDIR/.hidden"
+ln -s "f" "$LSDIR/link"
 
 $BIN/ls -l "$LSDIR" | grep -q " f$" || fail "ls -l missing file name"
 $BIN/ls -l "$LSDIR" | grep -q "^-" || fail "ls -l did not print long format"
+$BIN/ls -l "$LSDIR" | grep -q "^l" || fail "ls -l did not show symlink type"
+$BIN/ls -l "$LSDIR" | grep -q " link$" || fail "ls -l missing symlink name"
+
+$BIN/ls "$LSDIR" | grep -q "^\\.hidden$" && fail "ls should hide dotfiles by default"
+$BIN/ls -a "$LSDIR" | grep -q "^\\.hidden$" || fail "ls -a missing dotfile"
+$BIN/ls -a "$LSDIR" | grep -q "^\\.$" || fail "ls -a missing '.'"
+$BIN/ls -a "$LSDIR" | grep -q "^\\.\\.$" || fail "ls -a missing '..'"
+
+# -h without -l should be accepted (no effect)
+$BIN/ls -h "$LSDIR" >/dev/null 2>&1 || fail "ls -h should succeed"
+
+# combined flags
+$BIN/ls -alh "$LSDIR" | grep -q " \\.hidden$" || fail "ls -alh missing dotfile"
+
+LSFILE="$TMP/ls_file_operand"
+printf 'z' >"$LSFILE"
+OUT=$($BIN/ls "$LSFILE")
+[ "$OUT" = "$LSFILE" ] || fail "ls file operand unexpected: '$OUT'"
+
+set +e
+$BIN/ls "$LSDIR" "$LSFILE" >/dev/null 2>&1
+RC=$?
+set -e
+[ $RC -eq 2 ] || fail "ls should usage-error on multiple operands (got $RC)"
 
 dd if=/dev/zero of="$LSDIR/big" bs=1024 count=2 >/dev/null 2>&1
 $BIN/ls -lh "$LSDIR" | grep -q " big$" || fail "ls -lh missing big"
 $BIN/ls -lh "$LSDIR" | grep -Eq " [0-9]+[KMGT] " || fail "ls -lh missing human size suffix"
+
+# --- ls: -R recursive listing ---
+LSR="$TMP/ls_rec"
+mkdir -p "$LSR/root/sub"
+printf 'r' >"$LSR/root/rfile"
+printf 's' >"$LSR/root/sub/sfile"
+printf 'h' >"$LSR/root/sub/.hfile"
+ln -s "sub" "$LSR/root/linkdir"
+
+OUT=$($BIN/ls -R "$LSR/root")
+echo "$OUT" | grep -Fq "$LSR/root:" || fail "ls -R missing root header"
+echo "$OUT" | grep -Fq "$LSR/root/sub:" || fail "ls -R missing subdir header"
+echo "$OUT" | grep -q "^rfile$" || fail "ls -R missing rfile"
+echo "$OUT" | grep -q "^sfile$" || fail "ls -R missing sfile"
+echo "$OUT" | grep -q "^\\.hfile$" && fail "ls -R should hide dotfiles by default"
+echo "$OUT" | grep -Fq "$LSR/root/linkdir:" && fail "ls -R should not recurse into symlinked dirs"
+
+OUT=$($BIN/ls -aR "$LSR/root")
+echo "$OUT" | grep -q "^\\.hfile$" || fail "ls -aR missing hidden file"
 
 echo "OK"

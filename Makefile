@@ -49,7 +49,7 @@ endif
 RUNTIME_OBJ := $(BUILD_DIR)/sb_start.o
 LIB_OBJ := $(BUILD_DIR)/sb.o
 
-TOOLS := true false echo cat pwd ls wc mkdir rmdir rm mv cp head tail sort uniq tee tr cut date sleep ln readlink basename dirname touch chmod chown printf yes seq uname stat df
+TOOLS := true false echo cat pwd ls wc mkdir rmdir rm mv cp head tail sort uniq tee tr cut date sleep ln readlink basename dirname touch chmod chown printf yes seq uname stat df test grep kill id which xargs whoami
 
 .PHONY: all clean test tiny size size-short size-report size-report-short
 
@@ -57,7 +57,7 @@ SIZE_LINES ?= 200
 
 .PHONY: test
 
-all: $(TOOLS:%=$(BIN_DIR)/%)
+all: $(TOOLS:%=$(BIN_DIR)/%) $(BIN_DIR)/[ $(BIN_DIR)/realpath
 
 $(BUILD_DIR) $(BIN_DIR):
 	mkdir -p $@
@@ -71,6 +71,12 @@ $(LIB_OBJ): $(SRC_DIR)/sb.c $(SRC_DIR)/sb.h | $(BUILD_DIR)
 $(BIN_DIR)/%: $(TOOLS_DIR)/%.c $(RUNTIME_OBJ) $(LIB_OBJ) | $(BIN_DIR)
 	$(CC) $(CFLAGS_COMMON) $< $(RUNTIME_OBJ) $(LIB_OBJ) $(LDFLAGS_COMMON) -o $@
 	@if [ -n "$(SSTRIP)" ]; then $(SSTRIP) $@ >/dev/null 2>&1 || echo "note: sstrip failed on $@ (continuing)"; fi
+
+$(BIN_DIR)/[: $(BIN_DIR)/test | $(BIN_DIR)
+	ln -sf test $@
+
+$(BIN_DIR)/realpath: $(BIN_DIR)/readlink | $(BIN_DIR)
+	ln -sf readlink $@
 
 clean:
 	rm -rf $(BUILD_DIR) $(BIN_DIR)

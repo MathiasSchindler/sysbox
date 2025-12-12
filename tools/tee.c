@@ -12,14 +12,20 @@ static void tee_print_errno(const char *argv0, const char *ctx, sb_i64 err_neg) 
 	(void)sb_write_str(2, "\n");
 }
 
-static sb_i64 tee_open_out(const char *path) {
-	// Minimal: create/truncate.
-	return sb_sys_openat(SB_AT_FDCWD, path, SB_O_WRONLY | SB_O_CREAT | SB_O_TRUNC | SB_O_CLOEXEC, 0666);
+static sb_i64 tee_open_out(const char *path, int append) {
+	sb_i32 flags = SB_O_WRONLY | SB_O_CREAT | SB_O_CLOEXEC;
+	if (append) {
+		flags |= SB_O_APPEND;
+	} else {
+		flags |= SB_O_TRUNC;
+	}
+	return sb_sys_openat(SB_AT_FDCWD, path, flags, 0666);
 }
 
 __attribute__((used)) int main(int argc, char **argv, char **envp) {
 	(void)envp;
 	const char *argv0 = (argc > 0 && argv && argv[0]) ? argv[0] : "tee";
+	int append = 0;
 
 	int i = 1;
 	for (; i < argc; i++) {
@@ -32,8 +38,19 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 		if (a[0] != '-' || sb_streq(a, "-")) {
 			break;
 		}
-		// No flags in minimal tee.
-		sb_die_usage(argv0, "tee [FILE...]");
+		if (a[1] && a[1] != '-' && a[2]) {
+			// Combined short options.
+			for (sb_u32 j = 1; a[j]; j++) {
+				if (a[j] == 'a') append = 1;
+				else sb_die_usage(argv0, "tee [-a] [FILE...]");
+			}
+			continue;
+		}
+		if (sb_streq(a, "-a")) {
+			append = 1;
+			continue;
+		}
+		sb_die_usage(argv0, "tee [-a] [FILE...]");
 	}
 
 	sb_i32 out_fds[TEE_MAX_OUT];
@@ -54,9 +71,9 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 			continue;
 		}
 		if (out_n >= TEE_MAX_OUT) {
-			sb_die_usage(argv0, "tee [FILE...]");
+			sb_die_usage(argv0, "tee [-a] [FILE...]");
 		}
-		sb_i64 fd = tee_open_out(path);
+		sb_i64 fd = tee_open_out(path, append);
 		if (fd < 0) {
 			tee_print_errno(argv0, path, fd);
 			had_error = 1;

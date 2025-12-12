@@ -57,6 +57,18 @@ static int rlf_streq_n(const char *s, sb_usize n, const char *lit) {
 	return (lit[n] == '\0');
 }
 
+static int rlf_ends_with(const char *s, const char *suffix) {
+	if (!s || !suffix) {
+		return 0;
+	}
+	sb_usize slen = sb_strlen(s);
+	sb_usize tlen = sb_strlen(suffix);
+	if (tlen > slen) {
+		return 0;
+	}
+	return sb_streq(s + (slen - tlen), suffix);
+}
+
 static void rlf_pop_one_component(char *path) {
 	sb_usize len = sb_strlen(path);
 	if (len == 0) {
@@ -228,7 +240,9 @@ static sb_i64 rlf_canonicalize(const char *path, char out[4096]) {
 __attribute__((used)) int main(int argc, char **argv, char **envp) {
 	(void)envp;
 	const char *argv0 = (argc > 0 && argv && argv[0]) ? argv[0] : "readlink";
-	int canonical = 0;
+	int invoked_realpath = sb_streq(argv0, "realpath") || rlf_ends_with(argv0, "/realpath");
+	const char *usage = invoked_realpath ? "realpath PATH" : "readlink [-f] PATH";
+	int canonical = invoked_realpath ? 1 : 0;
 
 	int i = 1;
 	for (; i < argc; i++) {
@@ -241,15 +255,15 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 		if (a[0] != '-' || sb_streq(a, "-")) {
 			break;
 		}
-		if (sb_streq(a, "-f")) {
+		if (!invoked_realpath && sb_streq(a, "-f")) {
 			canonical = 1;
 			continue;
 		}
-		sb_die_usage(argv0, "readlink [-f] PATH");
+		sb_die_usage(argv0, usage);
 	}
 
 	if ((argc - i) != 1) {
-		sb_die_usage(argv0, "readlink [-f] PATH");
+		sb_die_usage(argv0, usage);
 	}
 
 	const char *path = argv[i];
@@ -257,7 +271,7 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 		char out[4096];
 		sb_i64 rr = rlf_canonicalize(path, out);
 		if (rr < 0) {
-			sb_die_errno(argv0, "readlink -f", rr);
+			sb_die_errno(argv0, invoked_realpath ? "realpath" : "readlink -f", rr);
 		}
 		sb_i64 w = sb_write_all(1, out, sb_strlen(out));
 		if (w < 0) {

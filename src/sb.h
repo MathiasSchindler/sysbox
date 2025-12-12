@@ -19,6 +19,9 @@ typedef unsigned char sb_u8;
 #define SB_SYS_fstat 5
 #define SB_SYS_lseek 8
 #define SB_SYS_close 3
+#define SB_SYS_getuid 102
+#define SB_SYS_getgid 104
+#define SB_SYS_getgroups 115
 #define SB_SYS_openat 257
 #define SB_SYS_mkdirat 258
 #define SB_SYS_fchownat 260
@@ -29,10 +32,15 @@ typedef unsigned char sb_u8;
 #define SB_SYS_symlinkat 266
 #define SB_SYS_readlinkat 267
 #define SB_SYS_fchmodat 268
+#define SB_SYS_faccessat 269
 #define SB_SYS_getcwd 79
 #define SB_SYS_getdents64 217
 #define SB_SYS_clock_gettime 228
+#define SB_SYS_kill 62
 #define SB_SYS_uname 63
+#define SB_SYS_execve 59
+#define SB_SYS_vfork 58
+#define SB_SYS_wait4 61
 #define SB_SYS_statfs 137
 #define SB_SYS_rt_sigaction 13
 #define SB_SYS_utimensat 280
@@ -45,6 +53,7 @@ typedef unsigned char sb_u8;
 #define SB_O_WRONLY 1
 #define SB_O_RDWR 2
 #define SB_O_CREAT 0100
+#define SB_O_APPEND 02000
 #define SB_O_TRUNC 01000
 #define SB_O_NOFOLLOW 0400000
 #define SB_O_CLOEXEC 02000000
@@ -57,6 +66,15 @@ typedef unsigned char sb_u8;
 #define SB_AT_SYMLINK_NOFOLLOW 0x100
 // linkat flags
 #define SB_AT_SYMLINK_FOLLOW 0x400
+
+// faccessat flags
+#define SB_AT_EACCESS 0x200
+
+// access(2) mode bits
+#define SB_F_OK 0
+#define SB_X_OK 1
+#define SB_W_OK 2
+#define SB_R_OK 4
 
 // Minimal errno values (Linux)
 #define SB_ENOENT 2
@@ -194,6 +212,18 @@ SB_INLINE sb_i64 sb_sys_write(sb_i32 fd, const void *buf, sb_usize len) {
 	return sb_syscall3(SB_SYS_write, (sb_i64)fd, (sb_i64)buf, (sb_i64)len);
 }
 
+SB_INLINE sb_i64 sb_sys_getuid(void) {
+	return sb_syscall0(SB_SYS_getuid);
+}
+
+SB_INLINE sb_i64 sb_sys_getgid(void) {
+	return sb_syscall0(SB_SYS_getgid);
+}
+
+SB_INLINE sb_i64 sb_sys_getgroups(sb_i32 size, sb_u32 *list) {
+	return sb_syscall2(SB_SYS_getgroups, (sb_i64)size, (sb_i64)list);
+}
+
 // Linux x86_64 struct stat (kernel ABI). Only st_mode is used by sysbox currently.
 struct sb_stat {
 	sb_u64 st_dev;
@@ -230,6 +260,10 @@ SB_INLINE sb_i64 sb_sys_newfstatat(sb_i32 dirfd, const char *path, struct sb_sta
 
 SB_INLINE sb_i64 sb_sys_fchmodat(sb_i32 dirfd, const char *path, sb_u32 mode, sb_i32 flags) {
 	return sb_syscall4(SB_SYS_fchmodat, (sb_i64)dirfd, (sb_i64)path, (sb_i64)mode, (sb_i64)flags);
+}
+
+SB_INLINE sb_i64 sb_sys_faccessat(sb_i32 dirfd, const char *path, sb_i32 mode, sb_i32 flags) {
+	return sb_syscall4(SB_SYS_faccessat, (sb_i64)dirfd, (sb_i64)path, (sb_i64)mode, (sb_i64)flags);
 }
 
 SB_INLINE sb_i64 sb_sys_fchownat(sb_i32 dirfd, const char *path, sb_u32 uid, sb_u32 gid, sb_i32 flags) {
@@ -296,8 +330,24 @@ SB_INLINE sb_i64 sb_sys_rt_sigaction(sb_i32 signum, const struct sb_sigaction *a
 	return sb_syscall4(SB_SYS_rt_sigaction, (sb_i64)signum, (sb_i64)act, (sb_i64)oldact, (sb_i64)sigsetsize);
 }
 
+SB_INLINE sb_i64 sb_sys_kill(sb_i32 pid, sb_i32 sig) {
+	return sb_syscall2(SB_SYS_kill, (sb_i64)pid, (sb_i64)sig);
+}
+
 SB_INLINE sb_i64 sb_sys_utimensat(sb_i32 dirfd, const char *path, const struct sb_timespec times[2], sb_i32 flags) {
 	return sb_syscall4(SB_SYS_utimensat, (sb_i64)dirfd, (sb_i64)path, (sb_i64)times, (sb_i64)flags);
+}
+
+SB_INLINE sb_i64 sb_sys_execve(const char *pathname, char *const argv[], char *const envp[]) {
+	return sb_syscall3(SB_SYS_execve, (sb_i64)pathname, (sb_i64)argv, (sb_i64)envp);
+}
+
+SB_INLINE sb_i64 sb_sys_vfork(void) {
+	return sb_syscall0(SB_SYS_vfork);
+}
+
+SB_INLINE sb_i64 sb_sys_wait4(sb_i32 pid, sb_i32 *wstatus, sb_i32 options, void *rusage) {
+	return sb_syscall4(SB_SYS_wait4, (sb_i64)pid, (sb_i64)wstatus, (sb_i64)options, (sb_i64)rusage);
 }
 
 SB_NORETURN void sb_exit(sb_i32 code);

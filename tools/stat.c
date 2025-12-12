@@ -46,16 +46,9 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 			continue;
 		}
 
-		sb_i64 fd = sb_sys_openat(SB_AT_FDCWD, path, SB_O_RDONLY | SB_O_CLOEXEC, 0);
-		if (fd < 0) {
-			warn_errno(argv0, path, fd);
-			rc = 1;
-			continue;
-		}
-
 		struct sb_stat st;
-		sb_i64 r = sb_sys_fstat((sb_i32)fd, &st);
-		(void)sb_sys_close((sb_i32)fd);
+		// Use newfstatat to avoid blocking on special files (e.g. FIFOs) while still following symlinks.
+		sb_i64 r = sb_sys_newfstatat(SB_AT_FDCWD, path, &st, 0);
 		if (r < 0) {
 			warn_errno(argv0, path, r);
 			rc = 1;
