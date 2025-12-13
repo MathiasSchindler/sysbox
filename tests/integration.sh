@@ -5,8 +5,11 @@ BIN=${1:?usage: integration.sh /path/to/sysbox/bin /path/to/tmpdir}
 TMP=${2:?usage: integration.sh /path/to/sysbox/bin /path/to/tmpdir}
 
 VERBOSE=${SB_TEST_VERBOSE:-0}
+COUNT_ONLY=${SB_TEST_COUNT:-0}
 
 LAST_CMD=""
+
+CHECKS=0
 
 vlog() {
   [ "$VERBOSE" = "1" ] && echo "$*" >&2
@@ -61,6 +64,7 @@ run_box_rc() {
 assert_eq() {
   # $1 desc, $2 expected, $3 actual
   [ "$2" = "$3" ] || fail_cmp "$1" "$2" "$3"
+  CHECKS=$((CHECKS + 1))
   vlog "PASS: $1"
 }
 
@@ -77,6 +81,7 @@ assert_rc() {
     fi
     exit 1
   fi
+  CHECKS=$((CHECKS + 1))
   vlog "PASS: $1"
 }
 
@@ -156,5 +161,9 @@ assert_rc "false exit code" 1 "$RC"
 
 run_box_rc "false; true"
 assert_rc "compound exit code" 0 "$RC"
+
+if [ "$COUNT_ONLY" = "1" ]; then
+  echo "$CHECKS"
+fi
 
 exit 0

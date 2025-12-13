@@ -20,7 +20,7 @@ Notes:
 | `cmp` | Bytewise compare; exit 0/1 | More flags (e.g. `-l`) | Handy in scripts/tests |
 | `col` | Handles `\b` and `\r` overstrikes | Full traditional behavior | Fixed max columns |
 | `column` | Align whitespace-delimited columns | More modes/delimiters | Fixed input/rows/cols caps |
-| `cp` | Regular files + symlinks; `-r`, `-p` | — | Symlinks copied as symlinks; recursion depth capped |
+| `cp` | Regular files + symlinks; `-r/-R`, `-p` (also supports bundled `-rp`) | — | Symlinks copied as symlinks; recursion depth capped |
 | `cut` | `-f` tab-delimited fields | `-d`, byte/char modes | Char mode implies Unicode decisions |
 | `date` | Epoch seconds | Formatting | Uses `clock_gettime` |
 | `df` | `statfs`-based totals; `-h` (K/M/G/T), `-T` (type hex), `-H` (header) | Headers formatting/padding; filesystem name decoding | Output values are derived from `statfs` |
@@ -38,7 +38,7 @@ Notes:
 | `hostname` | Prints `uname` nodename | Set hostname | Syscall-only print |
 | `id` | `id` prints numeric `uid/gid/groups`; `-u`, `-g` | `-n` names | Uses `getuid/getgid/getgroups` |
 | `kill` | `kill PID...` default SIGTERM; `kill -N PID...`; `kill -l` | — | Uses `kill` syscall |
-| `ln` | Hard link; `-s`, `-f` | — | — |
+| `ln` | Hard link; `-s`, `-f` (also supports bundled `-sf`) | — | — |
 | `ls` | One-per-line; hides dotfiles by default; `-a`, `-l`, `-h`, `-R` | Sorting | `-R` warns if recursion is truncated; depth capped |
 | `mkdir` | `mkdir DIR`, `-p`, `-m MODE` | — | — |
 | `more` | Minimal pager (24 lines/page) | Termios raw mode; sizing | Prompts via `/dev/tty` when available |
@@ -51,11 +51,11 @@ Notes:
 | `readlink` | Prints symlink target; `-f` canonicalize | — | — |
 | `realpath` | Same as `readlink -f` | Flags | Symlink to `readlink` |
 | `rev` | Reverse bytes per line | UTF-8-aware reverse | Fixed max line length |
-| `rm` | Unlink files; `-f`, `-r`, `-d` | — | Recursion depth capped |
+| `rm` | Unlink files; `-f`, `-r`, `-d` (also supports bundled short flags like `-rf`) | — | Recursion depth capped |
 | `rmdir` | Remove empty dir; `-p` | — | — |
-| `sed` | Substitution-only `s/REGEX/REPL/[gp]`, `-n`, `-e` | More commands; capture groups | Regex subset: `.^$.*` |
+| `sed` | `s/REGEX/REPL/[g][p]`, `d`, `-n`, repeatable `-e`; minimal addressing (`N` and `$`) | More commands; address ranges; capture groups; file/hold space | Regex subset: `.^$.*` + escapes |
 | `seq` | Integer sequences | Floats/formatting | `seq LAST|FIRST LAST|FIRST INCR LAST` |
-| `sh` | `-c`, `;`, `|`, `<`, `>`, `>>`, basic quotes; `cd`, `exit` | Variables; globbing; job control | Minimal shell |
+| `sh` | `-c CMD` and `sh FILE [args...]`; `;` and newlines; `|`; `&&/||`; `<`, `>`, `>>`; basic quotes; `cd`, `exit`; minimal `if/while/for`; minimal `$NAME` expansion (used by `for`); positional params `$0..$N`, `$#`, `$@`, `$*` | Variables (beyond `for`); globbing; job control | Minimal shell |
 | `sleep` | Seconds | Fractions | Uses `nanosleep` |
 | `sort` | In-memory line sort; `-r`, `-u`, `-n` | External sort; keys; locale | — |
 | `stat` | Basic file info; `-l` lstat; default follows symlinks | Formatting options | Prints type/perm/uid/gid/size |

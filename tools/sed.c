@@ -1,10 +1,15 @@
 #include "../src/sb.h"
 
 // Minimal sed subset:
-// - Script: only substitution command: s/REGEX/REPL/[g][p]
+// - Commands:
+//   - s/REGEX/REPL/[g][p]
+//   - d
+// - Addressing (minimal): Ncmd or $cmd (e.g. 2d, $d, 3s/a/b/)
 // - Regex: literals + ., *, ^, $, and backslash-escape for literals.
-// - Options: -n (suppress default printing), -e SCRIPT, -- end of options.
+// - Options: -n (suppress default printing), -e SCRIPT (repeatable), -- end of options.
 // - Input: FILE... or stdin.
+
+#define SED_MAX_CMDS 16
 
 static int sed_is_special(char c) {
 	return c == '.' || c == '*' || c == '^' || c == '$' || c == '\\';
@@ -127,11 +132,29 @@ static int sed_match_first(const char *re, const char *text, const char **out_st
 
 // --- Parsing s/// command
 
-struct sed_script {
+struct sed_subst {
 	char regex[512];
 	char repl[512];
 	int global;
 	int print_on_subst;
+};
+
+enum sed_addr_kind {
+	SED_ADDR_NONE = 0,
+	SED_ADDR_LINE,
+	SED_ADDR_LAST,
+};
+
+enum sed_cmd_kind {
+	SED_CMD_SUBST = 0,
+	SED_CMD_DEL,
+};
+
+struct sed_cmd {
+	enum sed_cmd_kind kind;
+	enum sed_addr_kind addr_kind;
+	sb_u64 addr_line;
+	struct sed_subst subst;
 };
 
 static int sed_parse_until_delim(const char *s, char delim, char *out, sb_usize out_sz, const char **out_next) {
@@ -158,8 +181,8 @@ static int sed_parse_until_delim(const char *s, char delim, char *out, sb_usize 
 	return -1;
 }
 
-static int sed_parse_script(const char *argv0, const char *script, struct sed_script *out) {
-	(void)argv0;
+
+static int sed_parse_subst(const char *script, struct sed_subst *out) {
 	if (!script || !*script || !out) return -1;
 	if (script[0] != 's') return -1;
 	char delim = script[1];
@@ -187,6 +210,59 @@ static int sed_parse_script(const char *argv0, const char *script, struct sed_sc
 		return -1;
 	}
 	return 0;
+}
+
+static int sed_is_digit(char c) {
+	return (c >= '0' && c <= '9');
+}
+
+static int sed_parse_addr(const char *s, enum sed_addr_kind *out_kind, sb_u64 *out_line, const char **out_next) {
+	*out_kind = SED_ADDR_NONE;
+	*out_line = 0;
+	*out_next = s;
+	if (!s || !*s) return 0;
+	if (*s == '$') {
+		*out_kind = SED_ADDR_LAST;
+		*out_next = s + 1;
+		return 0;
+	}
+	if (!sed_is_digit(*s)) {
+		return 0;
+	}
+	sb_u64 v = 0;
+	const char *p = s;
+	while (*p && sed_is_digit(*p)) {
+		v = v * 10u + (sb_u64)(*p - '0');
+		p++;
+	}
+	*out_kind = SED_ADDR_LINE;
+	*out_line = v;
+	*out_next = p;
+	return 0;
+}
+
+static int sed_parse_cmd(const char *script, struct sed_cmd *out) {
+	if (!script || !*script || !out) return -1;
+
+	enum sed_addr_kind ak;
+	sb_u64 al;
+	const char *p = 0;
+	if (sed_parse_addr(script, &ak, &al, &p) != 0) return -1;
+
+	if (!p || !*p) return -1;
+	out->addr_kind = ak;
+	out->addr_line = al;
+
+	if (*p == 'd' && p[1] == 0) {
+		out->kind = SED_CMD_DEL;
+		return 0;
+	}
+	if (*p == 's') {
+		out->kind = SED_CMD_SUBST;
+		if (sed_parse_subst(p, &out->subst) != 0) return -1;
+		return 0;
+	}
+	return -1;
 }
 
 static int sed_emit_repl(char *dst, sb_usize dst_sz, sb_usize *ioff, const char *repl, const char *mstart, const char *mend) {
@@ -219,7 +295,7 @@ static int sed_emit_repl(char *dst, sb_usize dst_sz, sb_usize *ioff, const char 
 	return 0;
 }
 
-static int sed_apply_subst(const struct sed_script *sc, const char *in, char *out, sb_usize out_sz, int *did_subst) {
+static int sed_apply_subst(const struct sed_subst *sc, const char *in, char *out, sb_usize out_sz, int *did_subst) {
 	*did_subst = 0;
 	// in is a NUL-terminated line without trailing newline.
 	const char *pos = in;
@@ -274,7 +350,25 @@ static int sed_apply_subst(const struct sed_script *sc, const char *in, char *ou
 	return 0;
 }
 
-static int sed_process_line(const char *argv0, const struct sed_script *sc, int suppress_default, const char *line, sb_usize len, int *any_fail) {
+static int sed_cmd_addr_matches(const struct sed_cmd *cmd, sb_u64 lineno, int is_last) {
+	if (!cmd) return 0;
+	if (cmd->addr_kind == SED_ADDR_NONE) return 1;
+	if (cmd->addr_kind == SED_ADDR_LINE) return lineno == cmd->addr_line;
+	if (cmd->addr_kind == SED_ADDR_LAST) return is_last;
+	return 0;
+}
+
+static int sed_print_line(const char *argv0, const char *s, int has_nl) {
+	sb_i64 w = sb_write_str(1, s);
+	if (w < 0) sb_die_errno(argv0, "write", w);
+	if (has_nl) {
+		w = sb_write_all(1, "\n", 1);
+		if (w < 0) sb_die_errno(argv0, "write", w);
+	}
+	return 0;
+}
+
+static int sed_process_line(const char *argv0, const struct sed_cmd *cmds, sb_u32 ncmds, int suppress_default, const char *line, sb_usize len, sb_u64 lineno, int is_last, int *any_fail) {
 	(void)any_fail;
 	// Separate trailing newline (if present).
 	int has_nl = 0;
@@ -284,48 +378,71 @@ static int sed_process_line(const char *argv0, const struct sed_script *sc, int 
 	}
 
 	// Copy into a NUL-terminated buffer.
-	char inbuf[65536];
-	if (len >= sizeof(inbuf)) {
+	char pat[65536];
+	if (len >= sizeof(pat)) {
 		(void)sb_write_str(2, argv0);
 		(void)sb_write_str(2, ": line too long\n");
 		return -1;
 	}
-	for (sb_usize i = 0; i < len; i++) inbuf[i] = line[i];
-	inbuf[len] = 0;
+	for (sb_usize i = 0; i < len; i++) pat[i] = line[i];
+	pat[len] = 0;
 
-	char outbuf[262144];
-	int did = 0;
-	if (sed_apply_subst(sc, inbuf, outbuf, sizeof(outbuf), &did) != 0) {
-		(void)sb_write_str(2, argv0);
-		(void)sb_write_str(2, ": output too long\n");
-		return -1;
-	}
+	char tmp[262144];
+	int deleted = 0;
+	int printed = 0;
 
-	int should_print = !suppress_default;
-	if (suppress_default) {
-		should_print = did && sc->print_on_subst;
-	}
-
-	if (should_print) {
-		// Print outbuf + newline if original had one.
-		sb_i64 w = sb_write_str(1, outbuf);
-		if (w < 0) sb_die_errno(argv0, "write", w);
-		if (has_nl) {
-			w = sb_write_all(1, "\n", 1);
-			if (w < 0) sb_die_errno(argv0, "write", w);
+	for (sb_u32 ci = 0; ci < ncmds; ci++) {
+		const struct sed_cmd *cmd = &cmds[ci];
+		if (!sed_cmd_addr_matches(cmd, lineno, is_last)) {
+			continue;
 		}
+		if (cmd->kind == SED_CMD_DEL) {
+			deleted = 1;
+			break;
+		}
+		if (cmd->kind == SED_CMD_SUBST) {
+			int did = 0;
+			if (sed_apply_subst(&cmd->subst, pat, tmp, sizeof(tmp), &did) != 0) {
+				(void)sb_write_str(2, argv0);
+				(void)sb_write_str(2, ": output too long\n");
+				return -1;
+			}
+			// Update pattern space.
+			sb_usize tlen = sed_cstr_len(tmp);
+			if (tlen >= sizeof(pat)) {
+				(void)sb_write_str(2, argv0);
+				(void)sb_write_str(2, ": output too long\n");
+				return -1;
+			}
+			for (sb_usize k = 0; k <= tlen; k++) pat[k] = tmp[k];
+
+			if (did && cmd->subst.print_on_subst) {
+				printed = 1;
+				(void)sed_print_line(argv0, pat, has_nl);
+			}
+			continue;
+		}
+	}
+
+	if (!deleted && !suppress_default && !printed) {
+		(void)sed_print_line(argv0, pat, has_nl);
 	}
 
 	return 0;
 }
 
-static int sed_process_fd(const char *argv0, const struct sed_script *sc, int suppress_default, sb_i32 fd, int *any_fail) {
+static int sed_process_fd(const char *argv0, const struct sed_cmd *cmds, sb_u32 ncmds, int suppress_default, sb_i32 fd, int *any_fail) {
 	char rbuf[32768];
 	sb_usize rpos = 0;
 	sb_usize rlen = 0;
 
 	char linebuf[65536];
 	sb_usize llen = 0;
+
+	char prev[65536];
+	sb_usize prev_len = 0;
+	int have_prev = 0;
+	sb_u64 lineno = 0;
 
 	for (;;) {
 		if (rpos == rlen) {
@@ -349,17 +466,45 @@ static int sed_process_fd(const char *argv0, const struct sed_script *sc, int su
 		}
 		linebuf[llen++] = c;
 		if (c == '\n') {
-			if (sed_process_line(argv0, sc, suppress_default, linebuf, llen, any_fail) != 0) {
+			if (have_prev) {
+				lineno++;
+				if (sed_process_line(argv0, cmds, ncmds, suppress_default, prev, prev_len, lineno, 0, any_fail) != 0) {
+					*any_fail = 1;
+					return -1;
+				}
+			}
+			// move current to prev
+			if (llen >= sizeof(prev)) {
+				(void)sb_write_str(2, argv0);
+				(void)sb_write_str(2, ": line too long\n");
 				*any_fail = 1;
 				return -1;
 			}
+			for (sb_usize i = 0; i < llen; i++) prev[i] = linebuf[i];
+			prev_len = llen;
+			have_prev = 1;
 			llen = 0;
 		}
 	}
 
-	// Last line without newline.
+	// If there's a final partial line (no newline), make it prev and process it as last.
 	if (llen > 0) {
-		if (sed_process_line(argv0, sc, suppress_default, linebuf, llen, any_fail) != 0) {
+		if (have_prev) {
+			lineno++;
+			if (sed_process_line(argv0, cmds, ncmds, suppress_default, prev, prev_len, lineno, 0, any_fail) != 0) {
+				*any_fail = 1;
+				return -1;
+			}
+		}
+		for (sb_usize i = 0; i < llen; i++) prev[i] = linebuf[i];
+		prev_len = llen;
+		have_prev = 1;
+		llen = 0;
+	}
+
+	if (have_prev) {
+		lineno++;
+		if (sed_process_line(argv0, cmds, ncmds, suppress_default, prev, prev_len, lineno, 1, any_fail) != 0) {
 			*any_fail = 1;
 			return -1;
 		}
@@ -373,7 +518,8 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 	const char *argv0 = (argc > 0 && argv && argv[0]) ? argv[0] : "sed";
 
 	int suppress_default = 0; // -n
-	const char *script = 0;
+	struct sed_cmd cmds[SED_MAX_CMDS];
+	sb_u32 ncmds = 0;
 
 	int i = 1;
 	for (; i < argc; i++) {
@@ -391,30 +537,32 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 		if (sed_streq(a, "-e")) {
 			i++;
 			if (i >= argc || !argv[i]) sb_die_usage(argv0, "sed [-n] [-e SCRIPT] [SCRIPT] [FILE...]");
-			if (script) sb_die_usage(argv0, "sed [-n] [-e SCRIPT] [SCRIPT] [FILE...]");
-			script = argv[i];
+			if (ncmds >= SED_MAX_CMDS) sb_die_usage(argv0, "sed [-n] [-e SCRIPT] [SCRIPT] [FILE...]");
+			if (sed_parse_cmd(argv[i], &cmds[ncmds]) != 0) {
+				sb_die_usage(argv0, "sed [-n] [-e SCRIPT] [SCRIPT] [FILE...] (only s/REGEX/REPL/[gp] and d supported)");
+			}
+			ncmds++;
 			continue;
 		}
 		// Unknown option.
 		sb_die_usage(argv0, "sed [-n] [-e SCRIPT] [SCRIPT] [FILE...]");
 	}
 
-	if (!script) {
+	if (ncmds == 0) {
 		if (i >= argc || !argv[i]) {
 			sb_die_usage(argv0, "sed [-n] [-e SCRIPT] [SCRIPT] [FILE...]");
 		}
-		script = argv[i++];
-	}
-
-	struct sed_script sc;
-	if (sed_parse_script(argv0, script, &sc) != 0) {
-		sb_die_usage(argv0, "sed [-n] [-e SCRIPT] [SCRIPT] [FILE...] (only s/REGEX/REPL/[gp] supported)");
+		if (sed_parse_cmd(argv[i], &cmds[ncmds]) != 0) {
+			sb_die_usage(argv0, "sed [-n] [-e SCRIPT] [SCRIPT] [FILE...] (only s/REGEX/REPL/[gp] and d supported)");
+		}
+		ncmds++;
+		i++;
 	}
 
 	int any_fail = 0;
 	if (i >= argc) {
 		// stdin
-		(void)sed_process_fd(argv0, &sc, suppress_default, 0, &any_fail);
+		(void)sed_process_fd(argv0, cmds, ncmds, suppress_default, 0, &any_fail);
 		return any_fail ? 1 : 0;
 	}
 
@@ -422,7 +570,7 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 		const char *path = argv[i];
 		if (!path) continue;
 		if (sed_streq(path, "-")) {
-			(void)sed_process_fd(argv0, &sc, suppress_default, 0, &any_fail);
+			(void)sed_process_fd(argv0, cmds, ncmds, suppress_default, 0, &any_fail);
 			continue;
 		}
 		sb_i64 fd = sb_sys_openat(SB_AT_FDCWD, path, SB_O_RDONLY | SB_O_CLOEXEC, 0);
@@ -431,7 +579,7 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 			any_fail = 1;
 			continue;
 		}
-		(void)sed_process_fd(argv0, &sc, suppress_default, (sb_i32)fd, &any_fail);
+		(void)sed_process_fd(argv0, cmds, ncmds, suppress_default, (sb_i32)fd, &any_fail);
 		(void)sb_sys_close((sb_i32)fd);
 	}
 

@@ -3,6 +3,9 @@ set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
+INTEGRATION_CHECKS=0
+RECIPES_CHECKS=0
+
 fail() {
   echo "FAIL: $*" >&2
   exit 1
@@ -1404,6 +1407,13 @@ echo "$OUT" | grep -q "^\\.hfile$" || fail "ls -aR missing hidden file"
 
 # --- integration: run pipelines/redirects using sysbox sh + sysbox tools only ---
 mark "integration"
-sh "$ROOT_DIR/tests/integration.sh" "$BIN" "$TMP" || fail "integration suite failed"
+INTEGRATION_CHECKS=$(SB_TEST_COUNT=1 sh "$ROOT_DIR/tests/integration.sh" "$BIN" "$TMP") || fail "integration suite failed"
 
-echo "OK"
+# --- recipes: longer "real world" command combinations (sysbox-only) ---
+# Enabled by default. Set SB_TEST_NO_RECIPES=1 to skip.
+if [ "${SB_TEST_NO_RECIPES:-0}" != "1" ]; then
+  mark "recipes"
+  RECIPES_CHECKS=$(SB_TEST_COUNT=1 sh "$ROOT_DIR/tests/recipes.sh" "$BIN" "$TMP" "$ROOT_DIR/tests/data") || fail "recipes suite failed"
+fi
+
+echo "OK (integration=${INTEGRATION_CHECKS} checks, recipes=${RECIPES_CHECKS} checks, tmp=$TMP)"

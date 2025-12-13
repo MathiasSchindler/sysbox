@@ -177,6 +177,16 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 			i++;
 			break;
 		}
+		if (a[1] && a[1] != '-' && a[2]) {
+			// Combined short options: -rf
+			for (sb_u32 j = 1; a[j]; j++) {
+				if (a[j] == 'f') force = 1;
+				else if (a[j] == 'r') recursive = 1;
+				else if (a[j] == 'd') dir_ok = 1;
+				else sb_die_usage(argv0, "rm [-f] [-r] [-d] [--] FILE...");
+			}
+			continue;
+		}
 		if (sb_streq(a, "-f")) {
 			force = 1;
 			continue;
