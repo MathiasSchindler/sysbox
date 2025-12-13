@@ -98,9 +98,9 @@ sysbox/
 ├── scripts/
 │   └── minimal.ld   # Custom linker script for small ELFs
 ├── tests/
-│   ├── run.sh       # Test runner (host shell)
-│   ├── integration.sh # Runs tests using sysbox `sh` and sysbox tools
-│   ├── recipes.sh     # Longer sysbox-only pipelines / script-ish tests
+│   ├── run.sh         # Single test entrypoint (host shell orchestrator)
+│   ├── suites/        # Modular test suites (smoke/integration/realworld)
+│   ├── lib/           # Shared shell helpers for suites
 │   └── data/          # Deterministic test fixtures
 ├── spec.md          # Detailed specifications
 └── status.md        # Implementation status tracker

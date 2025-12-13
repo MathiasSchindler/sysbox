@@ -22,15 +22,16 @@ Notes:
 | `column` | Align whitespace-delimited columns | More modes/delimiters | Fixed input/rows/cols caps |
 | `cp` | Regular files + symlinks; `-r/-R`, `-p` (also supports bundled `-rp`) | — | Symlinks copied as symlinks; recursion depth capped |
 | `cut` | `-f` fields; `-d` delimiter (single-byte) | Byte/char modes | Char mode implies Unicode decisions |
-| `date` | Epoch seconds | Formatting | Uses `clock_gettime` |
+| `date` | Epoch seconds; `+FORMAT` (UTC) supports `%Y%m%d%H%M%S%s` and `%%` | More strftime verbs; timezone/localtime; parsing | Uses `clock_gettime` |
 | `df` | `statfs`-based totals; `-h` (K/M/G/T), `-T` (type hex), `-H` (header) | Headers formatting/padding; filesystem name decoding | Output values are derived from `statfs` |
-| `diff` | Minimal line-based diff (first mismatch) | Full diffs, unified format | Useful for debugging |
+| `diff` | Minimal line-based diff (first mismatch); `-u` minimal unified output (first mismatch + small context) | Full diffs (multi-hunk), better sync, unified options | Useful for debugging |
 | `dirname` | Path parent | Edge-case fidelity | Pure string logic |
 | `du` | Summed sizes (bytes) directory traversal; `-s` | Block sizes; apparent-size toggle | Directory walking |
 | `echo` | `-n`, join args; `-e/-E` escapes | — | — |
 | `env` | Print env; `-i`, `-u`, `-0`; exec with modified env | — | Uses `execve` |
+| `expr` | Minimal arithmetic/comparison/logical evaluation (`+ - * / %`, `= != < <= > >=`, `| &`, parens) | More string ops (`:`, `substr`, `length`), POSIX fidelity | Useful in shell scripts |
 | `false` | Exit 1 | — | — |
-| `find` | `-name` (glob `*` `?`), `-type`, `-mindepth/-maxdepth` | Full expression language, `-exec`, `-prune` | Does not follow symlink dirs |
+| `find` | `-name` (glob `*` `?`), `-type`, `-mindepth/-maxdepth`, `-exec CMD... {} ... \;`, `-print` | Full expression language, `-prune`, more actions/tests | Does not follow symlink dirs |
 | `free` | Reads `/proc/meminfo`; prints mem/swap totals | Headers; human readable; more fields | Values are KiB from meminfo |
 | `grep` | Tiny regex matching (`-i/-v/-c/-n/-q`); `-F` fixed-string | Broader regex features | Regex is a small shared engine (BRE-ish subset) |
 | `head` | `-n N`, `-c N` | — | — |
@@ -39,13 +40,16 @@ Notes:
 | `id` | `id` prints numeric `uid/gid/groups`; `-u`, `-g` | `-n` names | Uses `getuid/getgid/getgroups` |
 | `kill` | `kill PID...` default SIGTERM; `kill -N PID...`; `kill -l` | — | Uses `kill` syscall |
 | `ln` | Hard link; `-s`, `-f` (also supports bundled `-sf`) | — | — |
-| `ls` | One-per-line; hides dotfiles by default; `-a`, `-l`, `-h`, `-R` | Sorting | `-R` warns if recursion is truncated; depth capped |
+| `ls` | One-per-line; hides dotfiles by default; `-a`, `-l`, `-h`, `-R`; name-sorted output | More sort modes (time/size), columns, colors | `-R` warns if recursion is truncated; depth capped |
 | `mkdir` | `mkdir DIR`, `-p`, `-m MODE` | — | — |
 | `more` | Minimal pager (24 lines/page) | Termios raw mode; sizing | Prompts via `/dev/tty` when available |
 | `mount` | Lists mounts via `/proc/self/mountinfo` | Mutating mounts/flags | Prints: `mountpoint\tfstype\tsource` |
 | `mv` | `renameat` fast-path; EXDEV fallback copy+unlink (regular files, symlinks, dirs) | Broader filetype support; dst-exists dir semantics; preserve more metadata | Cross-FS dir move requires DST to not exist |
+| `nl` | Number lines from stdin/file; `-ba` number all, default numbers non-empty | More `nl(1)` modes/flags | More flexible than `cat -n` |
 | `nproc` | Prints online CPUs via affinity | More flags (`--all`, etc.) | Uses `sched_getaffinity` |
-| `printf` | Minimal `%s/%d/%u/%x/%c/%%` | Width/precision; more escapes | Scripting workhorse |
+| `od` | Minimal octal dump (bytewise) | More formats/flags | Complements `hexdump` |
+| `paste` | Merge files line-wise; `-d LIST`; `-s` serial | More POSIX/GNU flags; multiple `-` handling | Handy for tabular text |
+| `printf` | `%s/%d/%u/%x/%c/%%`; width + precision; flags `-` and `0` (minimal) | More verbs/flags; more escapes | Scripting workhorse |
 | `ps` | Lists PID + comm from `/proc` | More columns/filtering | Pairs with `kill` |
 | `pwd` | Prints cwd | `-L/-P` semantics | — |
 | `readlink` | Prints symlink target; `-f` canonicalize | — | — |
@@ -56,7 +60,7 @@ Notes:
 | `sed` | `s/REGEX/REPL/[g][p]`, `d`, `p`, `-n`, repeatable `-e`; addressing (`N`, `$`, `/REGEX/`), ranges; hold space (`h/H/g/G/x`) | More commands; broader compatibility | Regex is a small shared engine; captures via `\(\)` + `\1..\9` |
 | `seq` | Integer sequences | Floats/formatting | `seq LAST|FIRST LAST|FIRST INCR LAST` |
 | `sh` | `-c CMD` and `sh FILE [args...]`; `;` and newlines; `|`; `&&/||`; `<`, `>`, `>>`; basic quotes; `cd`, `exit`; minimal `if/while/for`; minimal `$NAME` expansion (used by `for`); positional params `$0..$N`, `$#`, `$@`, `$*` | Variables (beyond `for`); globbing; job control | Minimal shell |
-| `sleep` | Seconds | Fractions | Uses `nanosleep` |
+| `sleep` | Seconds; decimal fractions | More compatible parsing/units | Uses `nanosleep` |
 | `sort` | In-memory line sort; `-r`, `-u`, `-n` | External sort; keys; locale | — |
 | `stat` | Basic file info; `-l` lstat; default follows symlinks | Formatting options | Prints type/perm/uid/gid/size |
 | `strings` | Printable ASCII runs; `-n N` | Encodings; offsets | Streaming; fixed prefix buffer |
@@ -64,7 +68,7 @@ Notes:
 | `tee` | Write stdin to stdout + files; `-a` append | — | Multi-file fanout |
 | `time` | Run cmd; print elapsed time | Formatting/options | Uses `clock_gettime` |
 | `touch` | Create if missing; set times (`-t`) | — | Uses `utimensat` |
-| `tr` | Basic 1:1 translate | Sets/ranges; delete; squeeze | — |
+| `tr` | Basic 1:1 translate; `-d` delete; `-s` squeeze | Sets/ranges | — |
 | `true` | Exit 0 | — | — |
 | `uname` | `uname`, `-m`, `-a` | More flags | Uses `uname` syscall |
 | `uniq` | Adjacent de-dup; `-c`, `-d`, `-u` | Fields; ignore-case; skip-chars | — |

@@ -1,5 +1,14 @@
 #include "../src/sb.h"
 
+#define DIFF_UNIFIED_CTX 3u
+
+struct diff_ctx_ring {
+	sb_u8 lines[DIFF_UNIFIED_CTX][4096];
+	sb_usize lens[DIFF_UNIFIED_CTX];
+	sb_u32 count; // number of valid lines (<= DIFF_UNIFIED_CTX)
+	sb_u32 head;  // next write index
+};
+
 struct diff_reader {
 	sb_i32 fd;
 	sb_u32 pos;
@@ -97,9 +106,48 @@ static void diff_write_line_prefixed(const char *argv0, const char *prefix, cons
 	}
 }
 
+static void diff_ctx_push(struct diff_ctx_ring *rb, const sb_u8 *line, sb_usize len) {
+	sb_u32 idx = rb->head % DIFF_UNIFIED_CTX;
+	if (len > sizeof(rb->lines[idx])) {
+		len = sizeof(rb->lines[idx]);
+	}
+	for (sb_usize i = 0; i < len; i++) {
+		rb->lines[idx][i] = line[i];
+	}
+	rb->lens[idx] = len;
+	rb->head = (rb->head + 1u) % DIFF_UNIFIED_CTX;
+	if (rb->count < DIFF_UNIFIED_CTX) {
+		rb->count++;
+	}
+}
+
+static void diff_write_unified_header(const char *argv0, const char *p1, const char *p2) {
+	(void)argv0;
+	(void)sb_write_str(1, "--- ");
+	(void)sb_write_str(1, p1);
+	(void)sb_write_str(1, "\n");
+	(void)sb_write_str(1, "+++ ");
+	(void)sb_write_str(1, p2);
+	(void)sb_write_str(1, "\n");
+}
+
+static void diff_write_unified_hunk_header(sb_u64 start1, sb_u64 count1, sb_u64 start2, sb_u64 count2) {
+	(void)sb_write_str(1, "@@ -");
+	(void)sb_write_u64_dec(1, start1);
+	(void)sb_write_str(1, ",");
+	(void)sb_write_u64_dec(1, count1);
+	(void)sb_write_str(1, " +");
+	(void)sb_write_u64_dec(1, start2);
+	(void)sb_write_str(1, ",");
+	(void)sb_write_u64_dec(1, count2);
+	(void)sb_write_str(1, " @@\n");
+}
+
 __attribute__((used)) int main(int argc, char **argv, char **envp) {
 	(void)envp;
 	const char *argv0 = (argc > 0 && argv && argv[0]) ? argv[0] : "diff";
+
+	int unified = 0;
 
 	int i = 1;
 	for (; i < argc; i++) {
@@ -111,10 +159,14 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 			i++;
 			break;
 		}
-		sb_die_usage(argv0, "diff [--] FILE1 FILE2");
+		if (sb_streq(a, "-u")) {
+			unified = 1;
+			continue;
+		}
+		sb_die_usage(argv0, "diff [-u] [--] FILE1 FILE2");
 	}
 	if (argc - i != 2) {
-		sb_die_usage(argv0, "diff [--] FILE1 FILE2");
+		sb_die_usage(argv0, "diff [-u] [--] FILE1 FILE2");
 	}
 
 	const char *p1 = argv[i];
@@ -131,6 +183,8 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 	sb_u8 l1[4096];
 	sb_u8 l2[4096];
 	sb_u64 line_no = 1;
+
+	struct diff_ctx_ring rb = {0};
 
 	for (;;) {
 		sb_usize n1 = 0;
@@ -165,17 +219,44 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 		}
 
 		if (!same) {
-			(void)sb_write_str(1, "diff: line ");
-			(void)sb_write_u64_dec(1, line_no);
-			(void)sb_write_str(1, "\n");
-			if (!eof1) diff_write_line_prefixed(argv0, "< ", l1, n1);
-			else diff_write_line_prefixed(argv0, "< ", (const sb_u8 *)"", 0);
-			if (!eof2) diff_write_line_prefixed(argv0, "> ", l2, n2);
-			else diff_write_line_prefixed(argv0, "> ", (const sb_u8 *)"", 0);
+			if (!unified) {
+				(void)sb_write_str(1, "diff: line ");
+				(void)sb_write_u64_dec(1, line_no);
+				(void)sb_write_str(1, "\n");
+				if (!eof1) diff_write_line_prefixed(argv0, "< ", l1, n1);
+				else diff_write_line_prefixed(argv0, "< ", (const sb_u8 *)"", 0);
+				if (!eof2) diff_write_line_prefixed(argv0, "> ", l2, n2);
+				else diff_write_line_prefixed(argv0, "> ", (const sb_u8 *)"", 0);
+			} else {
+				sb_u64 pre = (sb_u64)rb.count;
+				sb_u64 start = (line_no > pre) ? (line_no - pre) : 1;
+
+				sb_u64 rm = eof1 ? 0 : 1;
+				sb_u64 add = eof2 ? 0 : 1;
+				sb_u64 count1 = pre + rm;
+				sb_u64 count2 = pre + add;
+
+				diff_write_unified_header(argv0, p1, p2);
+				diff_write_unified_hunk_header(start, count1, start, count2);
+
+				// Write up to DIFF_UNIFIED_CTX previous matching lines as context.
+				sb_u32 oldest = (rb.head + DIFF_UNIFIED_CTX - rb.count) % DIFF_UNIFIED_CTX;
+				for (sb_u32 k = 0; k < rb.count; k++) {
+					sb_u32 idx = (oldest + k) % DIFF_UNIFIED_CTX;
+					diff_write_line_prefixed(argv0, " ", rb.lines[idx], rb.lens[idx]);
+				}
+
+				if (!eof1) diff_write_line_prefixed(argv0, "-", l1, n1);
+				if (!eof2) diff_write_line_prefixed(argv0, "+", l2, n2);
+			}
 
 			diff_close_if_needed(fd1);
 			diff_close_if_needed(fd2);
 			return 1;
+		}
+
+		if (unified) {
+			diff_ctx_push(&rb, l1, n1);
 		}
 
 		line_no++;

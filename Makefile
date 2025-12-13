@@ -49,7 +49,8 @@ endif
 RUNTIME_OBJ := $(BUILD_DIR)/sb_start.o
 LIB_OBJ := $(BUILD_DIR)/sb.o
 
-TOOLS := true false echo cat pwd ls wc mkdir rmdir rm mv cp head tail sort uniq tee tr cut date sleep ln readlink basename dirname touch chmod chown printf yes seq uname stat df test grep kill id which xargs whoami du clear hostname nproc env sed awk find sh cmp diff ps who time init \
+
+TOOLS := true false echo cat pwd ls wc mkdir rmdir rm mv cp head tail sort uniq tee tr cut paste nl od expr date sleep ln readlink basename dirname touch chmod chown printf yes seq uname stat df test grep kill id which xargs whoami du clear hostname nproc env sed awk find sh cmp diff ps who time init \
 	uptime free mount strings rev column col more watch hexdump
 
 .PHONY: all clean test tiny size size-short size-report size-report-short initramfs initramfs-clean
