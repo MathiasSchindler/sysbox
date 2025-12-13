@@ -1,25 +1,6 @@
 #include "../src/sb.h"
 
-struct sb_linux_dirent64 {
-	sb_u64 d_ino;
-	sb_i64 d_off;
-	sb_u16 d_reclen;
-	sb_u8 d_type;
-	char d_name[];
-} __attribute__((packed));
-
-static int cp_skip_dot(const char *name) {
-	if (!name || name[0] != '.') {
-		return 0;
-	}
-	if (name[1] == 0) {
-		return 1;
-	}
-	if (name[1] == '.' && name[2] == 0) {
-		return 1;
-	}
-	return 0;
-}
+#define CP_MAX_DEPTH 64
 
 static void cp_stream(const char *argv0, sb_i32 src_fd, sb_i32 dst_fd) {
 	sb_u8 buf[32768];
@@ -64,9 +45,49 @@ static void cp_preserve_at(const char *argv0, sb_i32 dirfd, const char *name, co
 	}
 }
 
+static void cp_copy_symlink_at(const char *argv0, sb_i32 src_dirfd, const char *src_name, sb_i32 dst_dirfd, const char *dst_name, int preserve) {
+	char target[4096];
+	sb_i64 n = sb_sys_readlinkat(src_dirfd, src_name, target, sizeof(target) - 1);
+	if (n < 0) {
+		sb_die_errno(argv0, src_name, n);
+	}
+	target[(sb_usize)n] = 0;
+
+	// Best-effort: overwrite existing destination.
+	sb_i64 ur = sb_sys_unlinkat(dst_dirfd, dst_name, 0);
+	if (ur < 0 && (sb_u64)(-ur) != (sb_u64)SB_ENOENT) {
+		// If it's a directory, do not remove it.
+		sb_die_errno(argv0, dst_name, ur);
+	}
+
+	sb_i64 r = sb_sys_symlinkat(target, dst_dirfd, dst_name);
+	if (r < 0) {
+		sb_die_errno(argv0, dst_name, r);
+	}
+
+	if (preserve) {
+		// Best-effort: preserve symlink timestamps when supported.
+		struct sb_stat st;
+		sb_i64 sr = sb_sys_newfstatat(src_dirfd, src_name, &st, SB_AT_SYMLINK_NOFOLLOW);
+		if (sr < 0) {
+			return;
+		}
+		struct sb_timespec ts[2];
+		ts[0].tv_sec = (sb_i64)st.st_atime;
+		ts[0].tv_nsec = (sb_i64)st.st_atime_nsec;
+		ts[1].tv_sec = (sb_i64)st.st_mtime;
+		ts[1].tv_nsec = (sb_i64)st.st_mtime_nsec;
+		(void)sb_sys_utimensat(dst_dirfd, dst_name, ts, SB_AT_SYMLINK_NOFOLLOW);
+	}
+}
+
 static void cp_copy_file_at(const char *argv0, sb_i32 src_dirfd, const char *src_name, sb_i32 dst_dirfd, const char *dst_name, int preserve) {
-	sb_i64 src_fd = sb_sys_openat(src_dirfd, src_name, SB_O_RDONLY | SB_O_CLOEXEC, 0);
+	sb_i64 src_fd = sb_sys_openat(src_dirfd, src_name, SB_O_RDONLY | SB_O_CLOEXEC | SB_O_NOFOLLOW, 0);
 	if (src_fd < 0) {
+		if ((sb_u64)(-src_fd) == (sb_u64)SB_ELOOP) {
+			cp_copy_symlink_at(argv0, src_dirfd, src_name, dst_dirfd, dst_name, preserve);
+			return;
+		}
 		sb_die_errno(argv0, src_name, src_fd);
 	}
 
@@ -114,11 +135,14 @@ static void cp_mkdirat_if_needed(const char *argv0, sb_i32 dirfd, const char *na
 	sb_die_errno(argv0, name, r);
 }
 
-static void cp_dir_contents(const char *argv0, sb_i32 src_dirfd, sb_i32 dst_dirfd, int preserve);
+static void cp_dir_contents(const char *argv0, sb_i32 src_dirfd, sb_i32 dst_dirfd, int preserve, int depth);
 
-static void cp_copy_entry(const char *argv0, sb_i32 src_dirfd, const char *name, sb_i32 dst_dirfd, int preserve) {
-	if (cp_skip_dot(name)) {
+static void cp_copy_entry(const char *argv0, sb_i32 src_dirfd, const char *name, sb_i32 dst_dirfd, int preserve, int depth) {
+	if (sb_is_dot_or_dotdot(name)) {
 		return;
+	}
+	if (depth > CP_MAX_DEPTH) {
+		sb_die_errno(argv0, name, (sb_i64)-SB_ELOOP);
 	}
 
 	// Try to treat it as a directory without following symlinks.
@@ -138,7 +162,7 @@ static void cp_copy_entry(const char *argv0, sb_i32 src_dirfd, const char *name,
 			sb_die_errno(argv0, name, out_dfd);
 		}
 
-		cp_dir_contents(argv0, (sb_i32)dfd, (sb_i32)out_dfd, preserve);
+		cp_dir_contents(argv0, (sb_i32)dfd, (sb_i32)out_dfd, preserve, depth + 1);
 		(void)sb_sys_close((sb_i32)out_dfd);
 		(void)sb_sys_close((sb_i32)dfd);
 
@@ -148,24 +172,9 @@ static void cp_copy_entry(const char *argv0, sb_i32 src_dirfd, const char *name,
 		return;
 	}
 
-	// If it's a symlink, decide based on the target type.
+	// If it's a symlink, copy the link itself (never dereference).
 	if ((sb_u64)(-dfd) == (sb_u64)SB_ELOOP) {
-		sb_i64 sfd = sb_sys_openat(src_dirfd, name, SB_O_RDONLY | SB_O_CLOEXEC, 0);
-		if (sfd < 0) {
-			sb_die_errno(argv0, name, sfd);
-		}
-		struct sb_stat st;
-		sb_i64 sr = sb_sys_fstat((sb_i32)sfd, &st);
-		(void)sb_sys_close((sb_i32)sfd);
-		if (sr < 0) {
-			sb_die_errno(argv0, "fstat", sr);
-		}
-		if ((st.st_mode & SB_S_IFMT) == SB_S_IFDIR) {
-			// Avoid recursing into symlinked directories (loop risk).
-			sb_die_errno(argv0, name, (sb_i64)-SB_ELOOP);
-		}
-		// Treat as copying the target file.
-		cp_copy_file_at(argv0, src_dirfd, name, dst_dirfd, name, preserve);
+		cp_copy_symlink_at(argv0, src_dirfd, name, dst_dirfd, name, preserve);
 		return;
 	}
 
@@ -173,7 +182,10 @@ static void cp_copy_entry(const char *argv0, sb_i32 src_dirfd, const char *name,
 	cp_copy_file_at(argv0, src_dirfd, name, dst_dirfd, name, preserve);
 }
 
-static void cp_dir_contents(const char *argv0, sb_i32 src_dirfd, sb_i32 dst_dirfd, int preserve) {
+static void cp_dir_contents(const char *argv0, sb_i32 src_dirfd, sb_i32 dst_dirfd, int preserve, int depth) {
+	if (depth > CP_MAX_DEPTH) {
+		sb_die_errno(argv0, "cp: recursion too deep", (sb_i64)-SB_ELOOP);
+	}
 	sb_u8 buf[32768];
 	for (;;) {
 		sb_i64 nread = sb_sys_getdents64(src_dirfd, buf, (sb_u32)sizeof(buf));
@@ -187,7 +199,7 @@ static void cp_dir_contents(const char *argv0, sb_i32 src_dirfd, sb_i32 dst_dirf
 		sb_u32 bpos = 0;
 		while (bpos < (sb_u32)nread) {
 			struct sb_linux_dirent64 *d = (struct sb_linux_dirent64 *)(buf + bpos);
-			cp_copy_entry(argv0, src_dirfd, d->d_name, dst_dirfd, preserve);
+			cp_copy_entry(argv0, src_dirfd, d->d_name, dst_dirfd, preserve, depth);
 			bpos += d->d_reclen;
 		}
 	}
@@ -237,7 +249,7 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 	// Recursive: if SRC is a directory, copy its contents into DST.
 	sb_i64 src_dfd = sb_sys_openat(SB_AT_FDCWD, src, SB_O_RDONLY | SB_O_CLOEXEC | SB_O_DIRECTORY | SB_O_NOFOLLOW, 0);
 	if (src_dfd < 0) {
-		// Not a directory; treat as a file copy.
+		// Not a directory; treat as a file (or symlink) copy.
 		cp_copy_file_at(argv0, SB_AT_FDCWD, src, SB_AT_FDCWD, dst, preserve);
 		return 0;
 	}
@@ -257,7 +269,7 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 		sb_die_errno(argv0, dst, dst_dfd);
 	}
 
-	cp_dir_contents(argv0, (sb_i32)src_dfd, (sb_i32)dst_dfd, preserve);
+	cp_dir_contents(argv0, (sb_i32)src_dfd, (sb_i32)dst_dfd, preserve, 0);
 	(void)sb_sys_close((sb_i32)dst_dfd);
 	(void)sb_sys_close((sb_i32)src_dfd);
 

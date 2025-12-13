@@ -1,33 +1,5 @@
 #include "../src/sb.h"
 
-static int which_starts_with(const char *s, const char *pre) {
-	while (*pre) {
-		if (*s != *pre) return 0;
-		s++;
-		pre++;
-	}
-	return 1;
-}
-
-static int which_has_slash(const char *s) {
-	for (const char *p = s; *p; p++) {
-		if (*p == '/') return 1;
-	}
-	return 0;
-}
-
-static const char *which_getenv(char **envp, const char *key_eq) {
-	if (!envp) return 0;
-	for (sb_usize i = 0; envp[i]; i++) {
-		const char *e = envp[i];
-		if (!e) continue;
-		if (which_starts_with(e, key_eq)) {
-			return e + sb_strlen(key_eq);
-		}
-	}
-	return 0;
-}
-
 static int which_try_path(const char *argv0, const char *path) {
 	sb_i64 r = sb_sys_faccessat(SB_AT_FDCWD, path, SB_X_OK, 0);
 	if (r < 0) {
@@ -40,22 +12,23 @@ static int which_try_path(const char *argv0, const char *path) {
 	return 1;
 }
 
-static int which_find_one(const char *argv0, char **envp, const char *cmd) {
+static int which_find(const char *argv0, char **envp, const char *cmd, int all) {
 	if (!cmd || !*cmd) {
 		return 0;
 	}
 
-	if (which_has_slash(cmd)) {
+	if (sb_has_slash(cmd)) {
 		return which_try_path(argv0, cmd);
 	}
 
-	const char *path_env = which_getenv(envp, "PATH=");
+	const char *path_env = sb_getenv_kv(envp, "PATH=");
 	if (!path_env) {
 		return 0;
 	}
 
 	char cand[4096];
 	const char *p = path_env;
+	int found = 0;
 	while (1) {
 		const char *seg = p;
 		while (*p && *p != ':') {
@@ -67,13 +40,16 @@ static int which_find_one(const char *argv0, char **envp, const char *cmd) {
 		// Empty segment means current directory.
 		if (seg_len == 0) {
 			if (cmd_len + 1 > sizeof(cand)) {
-				return 0;
+				return found;
 			}
 			for (sb_usize i = 0; i < cmd_len; i++) {
 				cand[i] = cmd[i];
 			}
 			cand[cmd_len] = 0;
-			if (which_try_path(argv0, cand)) return 1;
+			if (which_try_path(argv0, cand)) {
+				found = 1;
+				if (!all) return 1;
+			}
 		} else {
 			int needs_slash = 1;
 			if (seg_len > 0 && seg[seg_len - 1] == '/') {
@@ -81,7 +57,7 @@ static int which_find_one(const char *argv0, char **envp, const char *cmd) {
 			}
 			sb_usize total = seg_len + (needs_slash ? 1 : 0) + cmd_len;
 			if (total + 1 > sizeof(cand)) {
-				return 0;
+				return found;
 			}
 			for (sb_usize i = 0; i < seg_len; i++) {
 				cand[i] = seg[i];
@@ -94,7 +70,10 @@ static int which_find_one(const char *argv0, char **envp, const char *cmd) {
 				cand[off + i] = cmd[i];
 			}
 			cand[off + cmd_len] = 0;
-			if (which_try_path(argv0, cand)) return 1;
+			if (which_try_path(argv0, cand)) {
+				found = 1;
+				if (!all) return 1;
+			}
 		}
 
 		if (*p == ':') {
@@ -104,11 +83,12 @@ static int which_find_one(const char *argv0, char **envp, const char *cmd) {
 		break;
 	}
 
-	return 0;
+	return found;
 }
 
 __attribute__((used)) int main(int argc, char **argv, char **envp) {
 	const char *argv0 = (argc > 0 && argv && argv[0]) ? argv[0] : "which";
+	int all = 0;
 
 	int i = 1;
 	for (; i < argc; i++) {
@@ -118,21 +98,25 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 			i++;
 			break;
 		}
+		if (sb_streq(a, "-a")) {
+			all = 1;
+			continue;
+		}
 		if (a[0] == '-' && a[1] != 0) {
-			sb_die_usage(argv0, "which CMD...");
+			sb_die_usage(argv0, "which [-a] CMD...");
 		}
 		break;
 	}
 
 	if (i >= argc) {
-		sb_die_usage(argv0, "which CMD...");
+		sb_die_usage(argv0, "which [-a] CMD...");
 	}
 
 	int ok = 1;
 	for (; i < argc; i++) {
 		const char *cmd = argv[i];
 		if (!cmd) continue;
-		if (!which_find_one(argv0, envp, cmd)) {
+		if (!which_find(argv0, envp, cmd, all)) {
 			ok = 0;
 		}
 	}

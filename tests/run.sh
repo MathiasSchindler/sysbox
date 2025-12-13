@@ -65,6 +65,15 @@ mark "setup"
 [ -x "$BIN/which" ] || fail "missing $BIN/which (build first)"
 [ -x "$BIN/xargs" ] || fail "missing $BIN/xargs (build first)"
 [ -x "$BIN/whoami" ] || fail "missing $BIN/whoami (build first)"
+[ -x "$BIN/du" ] || fail "missing $BIN/du (build first)"
+[ -x "$BIN/clear" ] || fail "missing $BIN/clear (build first)"
+[ -x "$BIN/hostname" ] || fail "missing $BIN/hostname (build first)"
+[ -x "$BIN/nproc" ] || fail "missing $BIN/nproc (build first)"
+[ -x "$BIN/env" ] || fail "missing $BIN/env (build first)"
+[ -x "$BIN/sed" ] || fail "missing $BIN/sed (build first)"
+[ -x "$BIN/awk" ] || fail "missing $BIN/awk (build first)"
+[ -x "$BIN/find" ] || fail "missing $BIN/find (build first)"
+[ -x "$BIN/sh" ] || fail "missing $BIN/sh (build first)"
 
 # --- true/false: exit codes ---
 set +e
@@ -89,6 +98,12 @@ OUT=$($BIN/echo hello world)
 OUT=$($BIN/echo -n "no newline")
 [ "$OUT" = "no newline" ] || fail "echo -n unexpected: '$OUT'"
 
+OUT=$($BIN/echo -e 'a\nb' | $BIN/wc -l)
+[ "$OUT" = "2" ] || fail "echo -e should interpret \\n (got '$OUT')"
+
+OUT=$($BIN/echo -E 'a\nb')
+[ "$OUT" = "a\\nb" ] || fail "echo -E should print literal escapes (got '$OUT')"
+
 # --- mv: rename file and directory ---
 printf 'x' >"$TMP/mv_src"
 $BIN/mv "$TMP/mv_src" "$TMP/mv_dst" || fail "mv file failed"
@@ -107,6 +122,19 @@ NEST="$TMP/mkdirp/a/b/c"
 [ -d "$NEST" ] || fail "mkdir -p did not create expected directory"
 
 "$BIN/mkdir" -p "$NEST" || fail "mkdir -p should succeed on existing path"
+
+# --- mkdir: -m sets mode (best-effort; masked by umask) ---
+(umask 000; "$BIN/mkdir" -m 700 "$TMP/mkdir_m") || fail "mkdir -m failed"
+MODE=$(stat -c %a "$TMP/mkdir_m")
+[ "$MODE" = "700" ] || fail "mkdir -m did not set expected mode (got $MODE)"
+
+(umask 000; "$BIN/mkdir" -p -m 711 "$TMP/mkdir_mp/a/b") || fail "mkdir -p -m failed"
+MODEA=$(stat -c %a "$TMP/mkdir_mp")
+MODEB=$(stat -c %a "$TMP/mkdir_mp/a")
+MODEC=$(stat -c %a "$TMP/mkdir_mp/a/b")
+[ "$MODEA" = "711" ] || fail "mkdir -p -m did not set expected mode for parent (got $MODEA)"
+[ "$MODEB" = "711" ] || fail "mkdir -p -m did not set expected mode for parent (got $MODEB)"
+[ "$MODEC" = "711" ] || fail "mkdir -p -m did not set expected mode for leaf (got $MODEC)"
 
 mkdir -p "$TMP/mkdirp2"
 printf 'x' >"$TMP/mkdirp2/file"
@@ -156,6 +184,22 @@ mkdir -p "$TMP/rm2"
 "$BIN/rm" -- "$TMP/rm2/--" || fail "rm -- failed to remove file named '--'"
 [ ! -e "$TMP/rm2/--" ] || fail "rm -- did not remove file named '--'"
 
+# --- rm: -d removes empty directories (but not non-empty) ---
+mkdir -p "$TMP/rm_d/empty"
+"$BIN/rm" -d "$TMP/rm_d/empty" || fail "rm -d failed to remove empty directory"
+[ ! -e "$TMP/rm_d/empty" ] || fail "rm -d did not remove directory"
+
+mkdir -p "$TMP/rm_d/nonempty"
+printf x >"$TMP/rm_d/nonempty/file"
+set +e
+"$BIN/rm" -d "$TMP/rm_d/nonempty" >"$TMP/out" 2>"$TMP/err"
+RC=$?
+set -e
+[ $RC -eq 1 ] || fail "rm -d should exit 1 on non-empty directory (got $RC)"
+[ -s "$TMP/err" ] || fail "rm -d should print an error on failure"
+[ -d "$TMP/rm_d/nonempty" ] || fail "rm -d unexpectedly removed non-empty directory"
+[ -f "$TMP/rm_d/nonempty/file" ] || fail "rm -d unexpectedly removed file in directory"
+
 # --- rm: -r removes directories recursively and does not follow symlinks ---
 mkdir -p "$TMP/rm_r/dir/sub"
 printf 'x' >"$TMP/rm_r/dir/sub/file"
@@ -199,6 +243,23 @@ printf 'a\n\nb\n' >"$CAT_IN"
 OUT=$($BIN/cat -n "$CAT_IN")
 EXP=$(printf '1\ta\n2\t\n3\tb\n')
 [ "$OUT" = "$EXP" ] || fail "cat -n unexpected output: '$OUT'"
+
+# --- cat: -b numbers nonblank lines only ---
+OUT=$($BIN/cat -b "$CAT_IN")
+EXP=$(printf '1\ta\n\n2\tb\n')
+[ "$OUT" = "$EXP" ] || fail "cat -b unexpected output: '$OUT'"
+
+# --- cat: -s squeezes consecutive blank lines ---
+CAT_S="$TMP/cat_s"
+printf 'a\n\n\n\nb\n\n\n' >"$CAT_S"
+OUT=$($BIN/cat -s "$CAT_S")
+EXP=$(printf 'a\n\nb\n\n')
+[ "$OUT" = "$EXP" ] || fail "cat -s unexpected output: '$OUT'"
+
+# --- cat: -n -s numbers output lines after squeezing ---
+OUT=$($BIN/cat -n -s "$CAT_S")
+EXP=$(printf '1\ta\n2\t\n3\tb\n4\t\n')
+[ "$OUT" = "$EXP" ] || fail "cat -n -s unexpected output: '$OUT'"
 
 OUT=$(printf 'x\n' | $BIN/cat -n)
 EXP=$(printf '1\tx\n')
@@ -525,6 +586,16 @@ $BIN/chmod 755 "$TMP/localcmd" || fail "chmod for which test failed"
 OUT=$(cd "$TMP" && PATH=":$WHBIN" $BIN/which localcmd)
 [ "$OUT" = "localcmd" ] || fail "which empty PATH segment unexpected: '$OUT'"
 
+# which -a: print all matches in PATH order
+P1="$TMP/whichp1"
+P2="$TMP/whichp2"
+mkdir -p "$P1" "$P2"
+cp "$BIN/true" "$P1/dup"
+cp "$BIN/true" "$P2/dup"
+OUT=$(PATH="$P1:$P2" $BIN/which -a dup)
+[ "$OUT" = "$P1/dup
+$P2/dup" ] || fail "which -a unexpected: '$OUT'"
+
 set +e
 $BIN/which definitely_not_a_command >/dev/null 2>&1
 RC=$?
@@ -654,6 +725,52 @@ M2=$(stat -c %Y "$TFILE2")
 
 mark "chmod/chown/printf"
 
+mark "cmp/diff/time/ps/who"
+
+# --- cmp: equal and different files ---
+CMP1="$TMP/cmp1"
+CMP2="$TMP/cmp2"
+printf 'abc\n' >"$CMP1"
+printf 'abc\n' >"$CMP2"
+"$BIN/cmp" "$CMP1" "$CMP2" || fail "cmp equal files should exit 0"
+
+printf 'abc\n' >"$CMP1"
+printf 'abX\n' >"$CMP2"
+set +e
+"$BIN/cmp" "$CMP1" "$CMP2" >"$TMP/out" 2>"$TMP/err"
+RC=$?
+set -e
+[ $RC -eq 1 ] || fail "cmp different files should exit 1 (got $RC)"
+[ -s "$TMP/err" ] || fail "cmp should print a diagnostic on difference"
+
+# --- diff: no output when same; show first differing line when different ---
+printf 'a\nb\n' >"$TMP/diff1"
+printf 'a\nb\n' >"$TMP/diff2"
+OUT=$("$BIN/diff" "$TMP/diff1" "$TMP/diff2")
+[ -z "$OUT" ] || fail "diff same files should print nothing (got '$OUT')"
+
+printf 'a\nb\n' >"$TMP/diff1"
+printf 'a\nX\n' >"$TMP/diff2"
+set +e
+OUT=$("$BIN/diff" "$TMP/diff1" "$TMP/diff2")
+RC=$?
+set -e
+[ $RC -eq 1 ] || fail "diff different files should exit 1 (got $RC)"
+printf '%s' "$OUT" | "$BIN/grep" -q "diff: line" || fail "diff output should mention line"
+
+# --- time: runs command and prints timing to stderr ---
+OUT=$("$BIN/time" "$BIN/true" 2>&1)
+printf '%s' "$OUT" | "$BIN/grep" -q "real " || fail "time should print 'real ' (got '$OUT')"
+
+# --- ps: prints header and at least one process ---
+OUT=$("$BIN/ps" | "$BIN/head" -n 1)
+[ "$OUT" = "PID CMD" ] || fail "ps header unexpected (got '$OUT')"
+NLINES=$("$BIN/ps" | "$BIN/wc" -l)
+[ "$NLINES" -ge 2 ] || fail "ps should list at least one process (got $NLINES lines)"
+
+# --- who: should not fail even if utmp is missing ---
+"$BIN/who" >"$TMP/out" 2>"$TMP/err" || fail "who should not fail"
+
 # --- chmod: numeric (octal) modes ---
 CHMOD_F="$TMP/chmod-file"
 printf 'x' >"$CHMOD_F"
@@ -742,6 +859,13 @@ OUT=$(printf '1 2 3\n' | $BIN/xargs -n 2 $BIN/echo)
 OUT=$(printf '' | $BIN/xargs $BIN/echo hi)
 [ "$OUT" = "" ] || fail "xargs should do nothing on empty input: '$OUT'"
 
+OUT=$(printf 'a b\n' | $BIN/xargs -I {} -- $BIN/echo pre-{}-post)
+[ "$OUT" = "pre-a-post
+pre-b-post" ] || fail "xargs -I replacement unexpected: '$OUT'"
+
+OUT=$(printf 'x\n' | $BIN/xargs -I {} -- $BIN/echo hi)
+[ "$OUT" = "hi x" ] || fail "xargs -I should append token if no placeholder used: '$OUT'"
+
 set +e
 $BIN/xargs >/dev/null 2>&1
 RC=$?
@@ -785,6 +909,150 @@ mark "after-seq"
 mark "uname"
 OUT=$($BIN/uname)
 [ "$OUT" = "Linux" ] || fail "uname unexpected output: '$OUT'"
+
+# --- hostname: nodename from uname ---
+mark "hostname"
+OUT=$($BIN/hostname)
+[ "$OUT" = "$(uname -n)" ] || fail "hostname unexpected output: '$OUT'"
+
+# --- nproc: online CPUs as seen by sched affinity ---
+mark "nproc"
+if command -v nproc >/dev/null 2>&1; then
+  EXP=$(nproc)
+else
+  EXP=$(getconf _NPROCESSORS_ONLN)
+fi
+OUT=$($BIN/nproc)
+[ "$OUT" = "$EXP" ] || fail "nproc unexpected output: '$OUT' (exp '$EXP')"
+
+# --- clear: ANSI clear+home sequence ---
+mark "clear"
+OUT=$($BIN/clear)
+EXP=$(printf '\033[H\033[2J')
+[ "$OUT" = "$EXP" ] || fail "clear unexpected output"
+
+# --- env: print environment and execute with modified env ---
+mark "env"
+$BIN/env | grep -q '^PATH=' || fail "env output missing PATH= entry"
+
+OUT=$($BIN/env -i)
+[ "$OUT" = "" ] || fail "env -i should print nothing"
+
+$BIN/env FOO=bar | grep -q '^FOO=bar$' || fail "env FOO=bar should include assignment"
+
+OUT=$($BIN/env -i FOO=bar)
+[ "$OUT" = "FOO=bar" ] || fail "env -i FOO=bar unexpected output: '$OUT'"
+
+OUT=$($BIN/env -i FOO=bar -u FOO)
+[ "$OUT" = "" ] || fail "env -u should remove var (expected empty): '$OUT'"
+
+# env -0: NUL-separated output (verify via byte count)
+OUT=$($BIN/env -i FOO=bar -0 | $BIN/wc -c)
+[ "$OUT" = "8" ] || fail "env -0 byte count unexpected (expected 8): '$OUT'"
+
+OUT=$($BIN/env -i FOO=bar $BIN/env)
+[ "$OUT" = "FOO=bar" ] || fail "env exec (self) unexpected output: '$OUT'"
+
+OUT=$($BIN/env -i FOO=bar -u FOO $BIN/env)
+[ "$OUT" = "" ] || fail "env exec with -u unexpected output: '$OUT'"
+
+OUT=$($BIN/env -i FOO=bar $BIN/echo hi)
+[ "$OUT" = "hi" ] || fail "env exec with absolute CMD failed: '$OUT'"
+
+# --- sh: minimal shell for pipelines + redirects ---
+mark "sh"
+OUT=$($BIN/sh -c "$BIN/echo hi")
+[ "$OUT" = "hi" ] || fail "sh -c echo failed: '$OUT'"
+
+OUT=$($BIN/sh -c "$BIN/echo hi | $BIN/tr i o")
+[ "$OUT" = "ho" ] || fail "sh pipeline failed: '$OUT'"
+
+$BIN/sh -c "$BIN/echo hi > $TMP/sh_out" || fail "sh redirect > failed"
+[ "$(cat "$TMP/sh_out")" = "hi" ] || fail "sh redirect file content mismatch"
+
+$BIN/sh -c "$BIN/echo one > $TMP/sh_app; $BIN/echo two >> $TMP/sh_app" || fail "sh redirect >> failed"
+[ "$(cat "$TMP/sh_app")" = "one
+two" ] || fail "sh >> file content mismatch"
+
+OUT=$($BIN/sh -c "$BIN/cat < $TMP/sh_app | $BIN/wc -l")
+[ "$OUT" = "2" ] || fail "sh redirect < / pipeline failed: '$OUT'"
+
+# --- sed: substitution-only subset ---
+mark "sed"
+OUT=$(printf 'foo\n' | $BIN/sed 's/o/a/')
+[ "$OUT" = "fao" ] || fail "sed s/// unexpected: '$OUT'"
+
+OUT=$(printf 'foo\n' | $BIN/sed 's/o/a/g')
+[ "$OUT" = "faa" ] || fail "sed s///g unexpected: '$OUT'"
+
+OUT=$(printf 'abc\n' | $BIN/sed 's/^a/A/' | $BIN/sed 's/c$/C/')
+[ "$OUT" = "AbC" ] || fail "sed anchors unexpected: '$OUT'"
+
+OUT=$(printf 'abc\n' | $BIN/sed 's/.*/X/')
+[ "$OUT" = "X" ] || fail "sed dotstar unexpected: '$OUT'"
+
+OUT=$(printf 'foo\nbar\n' | $BIN/sed -n 's/o/O/p')
+[ "$OUT" = "fOo" ] || fail "sed -n ...p unexpected: '$OUT'"
+
+SED_F="$TMP/sed_in"
+printf 'hello\n' >"$SED_F"
+OUT=$($BIN/sed 's/ello/OLA/' "$SED_F")
+[ "$OUT" = "hOLA" ] || fail "sed file unexpected: '$OUT'"
+
+# --- awk: minimal subset (print/fields/pattern) ---
+mark "awk"
+OUT=$(printf 'a b\nc d\n' | $BIN/awk '{print $2}')
+[ "$OUT" = "b
+d" ] || fail "awk {print $2} unexpected: '$OUT'"
+
+OUT=$(printf 'a:b::d\n' | $BIN/awk -F : '{print $3}')
+[ "$OUT" = "" ] || fail "awk -F : field 3 (empty) unexpected: '$OUT'"
+
+OUT=$(printf 'ax 1\nbx 2\n' | $BIN/awk '/^a/ {print $1}')
+[ "$OUT" = "ax" ] || fail "awk pattern unexpected: '$OUT'"
+
+OUT=$(printf 'a b\nc\n' | $BIN/awk '{print NR,NF}')
+[ "$OUT" = "1 2
+2 1" ] || fail "awk NR,NF unexpected: '$OUT'"
+
+OUT=$(printf 'x\n' | $BIN/awk '{print "X",$1}')
+[ "$OUT" = "X x" ] || fail "awk string literal unexpected: '$OUT'"
+
+OUT=$(printf 'a 9\nb 10\nc 11\n' | $BIN/awk '$2>10 {print $1}')
+[ "$OUT" = "c" ] || fail "awk numeric pattern ($2>10) unexpected: '$OUT'"
+
+OUT=$(printf 'a 10\nb 10\n' | $BIN/awk '$2==10 {print NR}')
+[ "$OUT" = "1
+2" ] || fail "awk numeric pattern (==) unexpected: '$OUT'"
+
+# --- find: minimal subset ---
+mark "find"
+FROOT="$TMP/find_root"
+mkdir -p "$FROOT/sub"
+printf x >"$FROOT/a"
+printf y >"$FROOT/sub/b"
+ln -s "sub" "$FROOT/linksub"
+
+# -type f (order not guaranteed; sort for determinism)
+OUT=$($BIN/find "$FROOT" -type f | $BIN/sort)
+EXP=$(printf '%s\n%s\n' "$FROOT/a" "$FROOT/sub/b")
+[ "$OUT" = "$EXP" ] || fail "find -type f unexpected: '$OUT'"
+
+# -name with glob
+OUT=$($BIN/find "$FROOT" -name 'b' -type f)
+[ "$OUT" = "$FROOT/sub/b" ] || fail "find -name b unexpected: '$OUT'"
+
+OUT=$($BIN/find "$FROOT" -name 'a*' -type f)
+[ "$OUT" = "$FROOT/a" ] || fail "find -name a* unexpected: '$OUT'"
+
+# -maxdepth 0 should print only the root operand
+OUT=$($BIN/find "$FROOT" -maxdepth 0)
+[ "$OUT" = "$FROOT" ] || fail "find -maxdepth 0 unexpected: '$OUT'"
+
+# -mindepth 1 should omit the root
+OUT=$($BIN/find "$FROOT" -mindepth 1 -maxdepth 1 | $BIN/sort)
+EXP=$(printf '%s\n%s\n%s\n' "$FROOT/a" "$FROOT/linksub" "$FROOT/sub")
+[ "$OUT" = "$EXP" ] || fail "find -mindepth 1 -maxdepth 1 unexpected: '$OUT'"
 
 # --- stat: size/perm output ---
 mark "stat"
@@ -845,6 +1113,53 @@ set -e
 [ -s "$TMP/err" ] || fail "df should print an error on missing path"
 
 mark "after-df"
+
+# --- du: directory traversal and -s summary ---
+mark "du"
+DUDIR="$TMP/du"
+mkdir -p "$DUDIR/sub"
+printf 'abc' >"$DUDIR/a"
+printf 'hello' >"$DUDIR/sub/b"
+
+S1=$(stat -c %s "$DUDIR/a")
+S2=$(stat -c %s "$DUDIR/sub/b")
+SUB=$((S2))
+TOTAL=$((S1 + S2))
+
+OUT=$($BIN/du "$DUDIR")
+EXP=$(printf '%s\t%s\n%s\t%s\n' "$SUB" "$DUDIR/sub" "$TOTAL" "$DUDIR")
+[ "$OUT" = "$EXP" ] || fail "du dir unexpected output: '$OUT'"
+
+OUT=$($BIN/du -s "$DUDIR")
+EXP=$(printf '%s\t%s\n' "$TOTAL" "$DUDIR")
+[ "$OUT" = "$EXP" ] || fail "du -s unexpected output: '$OUT'"
+
+# --- du: does not follow symlinks (including loops) ---
+mark "du symlink"
+DULOOP="$TMP/du_loop"
+mkdir -p "$DULOOP"
+ln -s . "$DULOOP/loop"
+OUT=$($BIN/du "$DULOOP")
+EXP=$(printf '1\t%s\n' "$DULOOP")
+[ "$OUT" = "$EXP" ] || fail "du symlink loop unexpected output: '$OUT'"
+
+# --- du: permission denied should fail (exit 1) and print an error ---
+mark "du permission"
+DUPERM="$TMP/du_perm"
+mkdir -p "$DUPERM/secret"
+printf 'x' >"$DUPERM/secret/file"
+chmod 000 "$DUPERM/secret"
+
+set +e
+$BIN/du -s "$DUPERM/secret" >"$TMP/out" 2>"$TMP/err"
+RC=$?
+set -e
+
+# Restore permissions so cleanup can remove it.
+chmod 700 "$DUPERM/secret"
+
+[ $RC -eq 1 ] || fail "du should exit 1 on permission denied (got $RC)"
+[ -s "$TMP/err" ] || fail "du should print an error on permission denied"
 
 # --- test / [: condition evaluation ---
 TEST_DIR="$TMP/test_tool"

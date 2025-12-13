@@ -38,9 +38,13 @@ typedef unsigned char sb_u8;
 #define SB_SYS_clock_gettime 228
 #define SB_SYS_kill 62
 #define SB_SYS_uname 63
+#define SB_SYS_sched_getaffinity 204
 #define SB_SYS_execve 59
 #define SB_SYS_vfork 58
 #define SB_SYS_wait4 61
+#define SB_SYS_pipe2 293
+#define SB_SYS_dup2 33
+#define SB_SYS_chdir 80
 #define SB_SYS_statfs 137
 #define SB_SYS_rt_sigaction 13
 #define SB_SYS_utimensat 280
@@ -147,6 +151,15 @@ struct sb_sigaction {
 #define SB_S_IFREG 0100000
 #define SB_S_IFDIR 0040000
 #define SB_S_IFLNK 0120000
+
+// getdents64(2) entry (Linux kernel ABI)
+struct sb_linux_dirent64 {
+	sb_u64 d_ino;
+	sb_i64 d_off;
+	sb_u16 d_reclen;
+	sb_u8 d_type;
+	char d_name[];
+} __attribute__((packed));
 
 // Generic syscall helpers (Linux x86_64)
 SB_INLINE sb_i64 sb_syscall0(sb_i64 n) {
@@ -342,6 +355,22 @@ SB_INLINE sb_i64 sb_sys_execve(const char *pathname, char *const argv[], char *c
 	return sb_syscall3(SB_SYS_execve, (sb_i64)pathname, (sb_i64)argv, (sb_i64)envp);
 }
 
+SB_INLINE sb_i64 sb_sys_pipe2(sb_i32 pipefd[2], sb_i32 flags) {
+	return sb_syscall2(SB_SYS_pipe2, (sb_i64)pipefd, (sb_i64)flags);
+}
+
+SB_INLINE sb_i64 sb_sys_dup2(sb_i32 oldfd, sb_i32 newfd) {
+	return sb_syscall2(SB_SYS_dup2, (sb_i64)oldfd, (sb_i64)newfd);
+}
+
+SB_INLINE sb_i64 sb_sys_chdir(const char *path) {
+	return sb_syscall1(SB_SYS_chdir, (sb_i64)path);
+}
+
+SB_INLINE sb_i64 sb_sys_sched_getaffinity(sb_i32 pid, sb_usize cpusetsize, void *mask) {
+	return sb_syscall3(SB_SYS_sched_getaffinity, (sb_i64)pid, (sb_i64)cpusetsize, (sb_i64)mask);
+}
+
 SB_INLINE sb_i64 sb_sys_vfork(void) {
 	return sb_syscall0(SB_SYS_vfork);
 }
@@ -355,6 +384,10 @@ SB_NORETURN void sb_exit(sb_i32 code);
 // Tiny helpers
 sb_usize sb_strlen(const char *s);
 int sb_streq(const char *a, const char *b);
+int sb_starts_with_n(const char *s, const char *pre, sb_usize n);
+int sb_has_slash(const char *s);
+int sb_is_dot_or_dotdot(const char *name);
+const char *sb_getenv_kv(char **envp, const char *key_eq);
 int sb_parse_u64_dec(const char *s, sb_u64 *out);
 int sb_parse_u32_dec(const char *s, sb_u32 *out);
 int sb_parse_u32_octal(const char *s, sb_u32 *out);

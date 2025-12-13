@@ -28,6 +28,40 @@ int sb_streq(const char *a, const char *b) {
 	return *a == *b;
 }
 
+int sb_starts_with_n(const char *s, const char *pre, sb_usize n) {
+	for (sb_usize i = 0; i < n; i++) {
+		if (s[i] != pre[i]) return 0;
+		if (pre[i] == 0) return 0;
+	}
+	return 1;
+}
+
+int sb_has_slash(const char *s) {
+	for (const char *p = s; *p; p++) {
+		if (*p == '/') return 1;
+	}
+	return 0;
+}
+
+int sb_is_dot_or_dotdot(const char *name) {
+	if (!name) return 0;
+	if (name[0] != '.') return 0;
+	if (name[1] == 0) return 1;
+	if (name[1] == '.' && name[2] == 0) return 1;
+	return 0;
+}
+
+const char *sb_getenv_kv(char **envp, const char *key_eq) {
+	if (!envp || !key_eq) return 0;
+	sb_usize kn = sb_strlen(key_eq);
+	for (sb_usize i = 0; envp[i]; i++) {
+		const char *e = envp[i];
+		if (!e) continue;
+		if (sb_starts_with_n(e, key_eq, kn)) return e + kn;
+	}
+	return 0;
+}
+
 int sb_parse_u64_dec(const char *s, sb_u64 *out) {
 	if (!s || !*s || !out) {
 		return -1;

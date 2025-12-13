@@ -1,12 +1,6 @@
 #include "../src/sb.h"
 
-struct sb_linux_dirent64 {
-	sb_u64 d_ino;
-	sb_i64 d_off;
-	sb_u16 d_reclen;
-	sb_u8 d_type;
-	char d_name[];
-} __attribute__((packed));
+#define RM_MAX_DEPTH 64
 
 static void rm_print_err(const char *argv0, const char *path, sb_i64 err_neg) {
 	sb_u64 e = (err_neg < 0) ? (sb_u64)(-err_neg) : (sb_u64)err_neg;
@@ -16,19 +10,6 @@ static void rm_print_err(const char *argv0, const char *path, sb_i64 err_neg) {
 	(void)sb_write_str(2, ": errno=");
 	sb_write_hex_u64(2, e);
 	(void)sb_write_str(2, "\n");
-}
-
-static int rm_skip_dot(const char *name) {
-	if (!name || name[0] != '.') {
-		return 0;
-	}
-	if (name[1] == 0) {
-		return 1;
-	}
-	if (name[1] == '.' && name[2] == 0) {
-		return 1;
-	}
-	return 0;
 }
 
 static int rm_unlinkat_maybe(sb_i32 dirfd, const char *name, sb_i32 flags, int force, sb_i64 *out_err) {
@@ -43,9 +24,13 @@ static int rm_unlinkat_maybe(sb_i32 dirfd, const char *name, sb_i32 flags, int f
 	return -1;
 }
 
-static int rm_dirfd_contents(const char *argv0, sb_i32 dirfd, int force, int recursive);
+static int rm_dirfd_contents(const char *argv0, sb_i32 dirfd, int force, int recursive, int depth);
 
-static int rm_entry_dirfd(const char *argv0, sb_i32 parentfd, const char *name, int force, int recursive) {
+static int rm_entry_dirfd(const char *argv0, sb_i32 parentfd, const char *name, int force, int recursive, int depth) {
+	if (depth > RM_MAX_DEPTH) {
+		rm_print_err(argv0, name, (sb_i64)-SB_ELOOP);
+		return -1;
+	}
 	// First try as a non-directory entry (regular file, symlink, etc.).
 	sb_i64 err = 0;
 	if (rm_unlinkat_maybe(parentfd, name, 0, force, &err) == 0) {
@@ -75,7 +60,7 @@ static int rm_entry_dirfd(const char *argv0, sb_i32 parentfd, const char *name, 
 	}
 
 	int any_fail = 0;
-	if (rm_dirfd_contents(argv0, (sb_i32)cfd, force, recursive) != 0) {
+	if (rm_dirfd_contents(argv0, (sb_i32)cfd, force, recursive, depth + 1) != 0) {
 		any_fail = 1;
 	}
 	(void)sb_sys_close((sb_i32)cfd);
@@ -89,7 +74,7 @@ static int rm_entry_dirfd(const char *argv0, sb_i32 parentfd, const char *name, 
 	return any_fail ? -1 : 0;
 }
 
-static int rm_dirfd_contents(const char *argv0, sb_i32 dirfd, int force, int recursive) {
+static int rm_dirfd_contents(const char *argv0, sb_i32 dirfd, int force, int recursive, int depth) {
 	sb_u8 buf[32768];
 	int any_fail = 0;
 
@@ -106,8 +91,8 @@ static int rm_dirfd_contents(const char *argv0, sb_i32 dirfd, int force, int rec
 		while (bpos < (sb_u32)nread) {
 			struct sb_linux_dirent64 *d = (struct sb_linux_dirent64 *)(buf + bpos);
 			const char *name = d->d_name;
-			if (!rm_skip_dot(name)) {
-				if (rm_entry_dirfd(argv0, dirfd, name, force, recursive) != 0) {
+			if (!sb_is_dot_or_dotdot(name)) {
+				if (rm_entry_dirfd(argv0, dirfd, name, force, recursive, depth) != 0) {
 					any_fail = 1;
 				}
 			}
@@ -118,11 +103,23 @@ static int rm_dirfd_contents(const char *argv0, sb_i32 dirfd, int force, int rec
 	return any_fail ? -1 : 0;
 }
 
-static int rm_path(const char *argv0, const char *path, int force, int recursive) {
+static int rm_path(const char *argv0, const char *path, int force, int recursive, int dir_ok) {
 	// Fast path: try unlink first.
 	sb_i64 err = 0;
 	if (rm_unlinkat_maybe(SB_AT_FDCWD, path, 0, force, &err) == 0) {
 		return 0;
+	}
+
+	if (!recursive && dir_ok) {
+		sb_u64 e = (sb_u64)(-err);
+		if (e == (sb_u64)SB_EISDIR || e == (sb_u64)SB_EPERM) {
+			sb_i64 errd = 0;
+			if (rm_unlinkat_maybe(SB_AT_FDCWD, path, SB_AT_REMOVEDIR, force, &errd) == 0) {
+				return 0;
+			}
+			rm_print_err(argv0, path, errd);
+			return -1;
+		}
 	}
 
 	if (!recursive) {
@@ -148,7 +145,7 @@ static int rm_path(const char *argv0, const char *path, int force, int recursive
 	}
 
 	int any_fail = 0;
-	if (rm_dirfd_contents(argv0, (sb_i32)dfd, force, recursive) != 0) {
+	if (rm_dirfd_contents(argv0, (sb_i32)dfd, force, recursive, 0) != 0) {
 		any_fail = 1;
 	}
 	(void)sb_sys_close((sb_i32)dfd);
@@ -168,6 +165,7 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 	const char *argv0 = (argc > 0 && argv && argv[0]) ? argv[0] : "rm";
 	int force = 0;
 	int recursive = 0;
+	int dir_ok = 0;
 
 	int i = 1;
 	for (; i < argc; i++) {
@@ -187,17 +185,21 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 			recursive = 1;
 			continue;
 		}
-		sb_die_usage(argv0, "rm [-f] [-r] [--] FILE...");
+		if (sb_streq(a, "-d")) {
+			dir_ok = 1;
+			continue;
+		}
+		sb_die_usage(argv0, "rm [-f] [-r] [-d] [--] FILE...");
 	}
 
 	if (i >= argc) {
-		sb_die_usage(argv0, "rm [-f] [-r] [--] FILE...");
+		sb_die_usage(argv0, "rm [-f] [-r] [-d] [--] FILE...");
 	}
 
 	int any_fail = 0;
 	for (; i < argc; i++) {
 		const char *path = argv[i] ? argv[i] : "";
-		if (rm_path(argv0, path, force, recursive) != 0) {
+		if (rm_path(argv0, path, force, recursive, dir_ok) != 0) {
 			any_fail = 1;
 		}
 	}

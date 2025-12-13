@@ -1,6 +1,40 @@
 #include "../src/sb.h"
 
-static void cat_fd(const char *argv0, sb_i32 fd) {
+struct cat_outbuf {
+	sb_u8 buf[4096];
+	sb_usize len;
+};
+
+static void cat_out_flush(const char *argv0, struct cat_outbuf *out) {
+	if (!out || out->len == 0) {
+		return;
+	}
+	sb_i64 w = sb_write_all(1, out->buf, out->len);
+	if (w < 0) {
+		sb_die_errno(argv0, "write", w);
+	}
+	out->len = 0;
+}
+
+static void cat_out_write_byte(const char *argv0, struct cat_outbuf *out, sb_u8 b) {
+	if (out->len == sizeof(out->buf)) {
+		cat_out_flush(argv0, out);
+	}
+	out->buf[out->len++] = b;
+}
+
+static void cat_write_line_prefix(const char *argv0, sb_u64 line_no) {
+	if (sb_write_u64_dec(1, line_no) < 0) sb_die_errno(argv0, "write", -1);
+	if (sb_write_all(1, "\t", 1) < 0) sb_die_errno(argv0, "write", -1);
+}
+
+enum cat_number_mode {
+	CAT_NUM_NONE = 0,
+	CAT_NUM_ALL = 1,
+	CAT_NUM_NONBLANK = 2,
+};
+
+static void cat_fd_raw(const char *argv0, sb_i32 fd) {
 	sb_u8 buf[32768];
 	for (;;) {
 		sb_i64 r = sb_sys_read(fd, buf, (sb_usize)sizeof(buf));
@@ -17,13 +51,10 @@ static void cat_fd(const char *argv0, sb_i32 fd) {
 	}
 }
 
-static void cat_write_line_prefix(const char *argv0, sb_u64 line_no) {
-	if (sb_write_u64_dec(1, line_no) < 0) sb_die_errno(argv0, "write", -1);
-	if (sb_write_all(1, "\t", 1) < 0) sb_die_errno(argv0, "write", -1);
-}
-
-static void cat_fd_numbered(const char *argv0, sb_i32 fd, sb_u64 *line_no, int *at_line_start) {
+static void cat_fd_filtered(const char *argv0, sb_i32 fd, int squeeze_blank, enum cat_number_mode number_mode, sb_u64 *line_no, int *at_line_start, int *prev_blank_line, int *cur_line_blank) {
 	sb_u8 buf[32768];
+	struct cat_outbuf out = {.len = 0};
+
 	for (;;) {
 		sb_i64 r = sb_sys_read(fd, buf, (sb_usize)sizeof(buf));
 		if (r < 0) {
@@ -34,37 +65,57 @@ static void cat_fd_numbered(const char *argv0, sb_i32 fd, sb_u64 *line_no, int *
 		}
 
 		sb_u32 n = (sb_u32)r;
-		sb_u32 i = 0;
-		while (i < n) {
+		for (sb_u32 i = 0; i < n; i++) {
+			sb_u8 b = buf[i];
+
 			if (*at_line_start) {
+				// Squeeze blank lines: if this line is blank and previous output line was blank, skip it.
+				if (squeeze_blank && b == '\n' && *prev_blank_line) {
+					continue;
+				}
+
+				if (number_mode == CAT_NUM_ALL) {
+					cat_out_flush(argv0, &out);
+					cat_write_line_prefix(argv0, *line_no);
+					*at_line_start = 0;
+				}
+				// For CAT_NUM_NONBLANK, delay prefix until first non-newline byte.
+			}
+
+			if (*at_line_start && number_mode == CAT_NUM_NONBLANK && b != '\n') {
+				cat_out_flush(argv0, &out);
 				cat_write_line_prefix(argv0, *line_no);
-				*at_line_start = 0;
-			}
-
-			sb_u32 j = i;
-			while (j < n && buf[j] != '\n') j++;
-			if (j < n) {
-				// include newline
-				j++;
-			}
-
-			if (sb_write_all(1, &buf[i], (sb_usize)(j - i)) < 0) {
-				sb_die_errno(argv0, "write", -1);
-			}
-
-			if (j > i && buf[j - 1] == '\n') {
 				(*line_no)++;
-				*at_line_start = 1;
+				*at_line_start = 0;
+				*cur_line_blank = 0;
 			}
-			i = j;
+
+			if (b != '\n') {
+				*cur_line_blank = 0;
+			}
+
+			cat_out_write_byte(argv0, &out, b);
+			if (b == '\n') {
+				*at_line_start = 1;
+				*prev_blank_line = *cur_line_blank ? 1 : 0;
+				*cur_line_blank = 1;
+				if (number_mode == CAT_NUM_ALL) {
+					(*line_no)++;
+				}
+			}
 		}
 	}
+
+	cat_out_flush(argv0, &out);
 }
 
-static void cat_path(const char *argv0, const char *path, int number, sb_u64 *line_no, int *at_line_start) {
+static void cat_path(const char *argv0, const char *path, int squeeze_blank, enum cat_number_mode number_mode, sb_u64 *line_no, int *at_line_start, int *prev_blank_line, int *cur_line_blank) {
 	if (sb_streq(path, "-")) {
-		if (number) cat_fd_numbered(argv0, 0, line_no, at_line_start);
-		else cat_fd(argv0, 0);
+		if (!squeeze_blank && number_mode == CAT_NUM_NONE) {
+			cat_fd_raw(argv0, 0);
+		} else {
+			cat_fd_filtered(argv0, 0, squeeze_blank, number_mode, line_no, at_line_start, prev_blank_line, cur_line_blank);
+		}
 		return;
 	}
 
@@ -73,8 +124,11 @@ static void cat_path(const char *argv0, const char *path, int number, sb_u64 *li
 		sb_die_errno(argv0, path, fd);
 	}
 
-	if (number) cat_fd_numbered(argv0, (sb_i32)fd, line_no, at_line_start);
-	else cat_fd(argv0, (sb_i32)fd);
+	if (!squeeze_blank && number_mode == CAT_NUM_NONE) {
+		cat_fd_raw(argv0, (sb_i32)fd);
+	} else {
+		cat_fd_filtered(argv0, (sb_i32)fd, squeeze_blank, number_mode, line_no, at_line_start, prev_blank_line, cur_line_blank);
+	}
 	(void)sb_sys_close((sb_i32)fd);
 }
 
@@ -82,7 +136,8 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 	(void)envp;
 
 	const char *argv0 = (argc > 0 && argv && argv[0]) ? argv[0] : "cat";
-	int number = 0;
+	int squeeze_blank = 0;
+	enum cat_number_mode number_mode = CAT_NUM_NONE;
 
 	int i = 1;
 	for (; i < argc; i++) {
@@ -93,24 +148,37 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 			break;
 		}
 		if (sb_streq(a, "-n")) {
-			number = 1;
+			number_mode = CAT_NUM_ALL;
 			continue;
 		}
-		sb_die_usage(argv0, "cat [-n] [--] [FILE...]");
+		if (sb_streq(a, "-b")) {
+			number_mode = CAT_NUM_NONBLANK;
+			continue;
+		}
+		if (sb_streq(a, "-s")) {
+			squeeze_blank = 1;
+			continue;
+		}
+		sb_die_usage(argv0, "cat [-n] [-b] [-s] [--] [FILE...]");
 	}
 
 	sb_u64 line_no = 1;
 	int at_line_start = 1;
+	int prev_blank_line = 0;
+	int cur_line_blank = 1;
 
 	if (i >= argc) {
-		if (number) cat_fd_numbered(argv0, 0, &line_no, &at_line_start);
-		else cat_fd(argv0, 0);
+		if (!squeeze_blank && number_mode == CAT_NUM_NONE) {
+			cat_fd_raw(argv0, 0);
+		} else {
+			cat_fd_filtered(argv0, 0, squeeze_blank, number_mode, &line_no, &at_line_start, &prev_blank_line, &cur_line_blank);
+		}
 		return 0;
 	}
 
 	for (; i < argc; i++) {
 		const char *path = argv[i] ? argv[i] : "";
-		cat_path(argv0, path, number, &line_no, &at_line_start);
+		cat_path(argv0, path, squeeze_blank, number_mode, &line_no, &at_line_start, &prev_blank_line, &cur_line_blank);
 	}
 
 	return 0;

@@ -1,36 +1,8 @@
 #include "../src/sb.h"
 
-static int starts_with(const char *s, const char *pre) {
-	while (*pre) {
-		if (*s != *pre) return 0;
-		s++;
-		pre++;
-	}
-	return 1;
-}
-
-static int has_slash(const char *s) {
-	for (const char *p = s; *p; p++) {
-		if (*p == '/') return 1;
-	}
-	return 0;
-}
-
-static const char *getenv_kv(char **envp, const char *key_eq) {
-	if (!envp) return 0;
-	for (sb_usize i = 0; envp[i]; i++) {
-		const char *e = envp[i];
-		if (!e) continue;
-		if (starts_with(e, key_eq)) {
-			return e + sb_strlen(key_eq);
-		}
-	}
-	return 0;
-}
-
 static int find_executable(char **envp, const char *cmd, char *out_path, sb_usize out_sz) {
 	if (!cmd || !*cmd) return 0;
-	if (has_slash(cmd)) {
+	if (sb_has_slash(cmd)) {
 		// Use directly.
 		sb_usize n = sb_strlen(cmd);
 		if (n + 1 > out_sz) return 0;
@@ -39,7 +11,7 @@ static int find_executable(char **envp, const char *cmd, char *out_path, sb_usiz
 		return 1;
 	}
 
-	const char *path_env = getenv_kv(envp, "PATH=");
+	const char *path_env = sb_getenv_kv(envp, "PATH=");
 	if (!path_env) return 0;
 
 	char cand[4096];
@@ -131,6 +103,8 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 	const char *argv0 = (argc > 0 && argv && argv[0]) ? argv[0] : "xargs";
 
 	sb_u32 max_per = 0; // 0 means "use maximum possible"
+	const char *repl = 0;
+	sb_usize repl_len = 0;
 
 	int ai = 1;
 	for (; ai < argc; ai++) {
@@ -142,6 +116,7 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 		}
 		if (a[0] != '-') break;
 		if (sb_streq(a, "-n")) {
+			if (repl) sb_die_usage(argv0, "xargs [-n N] [-I REPL] -- CMD [ARGS...]");
 			ai++;
 			if (ai >= argc || !argv[ai]) sb_die_usage(argv0, "xargs [-n N] -- CMD [ARGS...]");
 			if (sb_parse_u32_dec(argv[ai], &max_per) != 0 || max_per == 0) {
@@ -149,11 +124,20 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 			}
 			continue;
 		}
+		if (sb_streq(a, "-I")) {
+			if (max_per) sb_die_usage(argv0, "xargs [-n N] [-I REPL] -- CMD [ARGS...]");
+			ai++;
+			if (ai >= argc || !argv[ai]) sb_die_usage(argv0, "xargs [-n N] [-I REPL] -- CMD [ARGS...]");
+			repl = argv[ai];
+			repl_len = sb_strlen(repl);
+			if (repl_len == 0) sb_die_usage(argv0, "xargs [-n N] [-I REPL] -- CMD [ARGS...]");
+			continue;
+		}
 		sb_die_usage(argv0, "xargs [-n N] -- CMD [ARGS...]");
 	}
 
 	if (ai >= argc || !argv[ai]) {
-		sb_die_usage(argv0, "xargs [-n N] -- CMD [ARGS...]");
+		sb_die_usage(argv0, repl ? "xargs [-I REPL] -- CMD [ARGS...]" : "xargs [-n N] -- CMD [ARGS...]");
 	}
 
 	const char *cmd = argv[ai++];
@@ -177,6 +161,154 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 		(void)sb_write_str(2, cmd);
 		(void)sb_write_str(2, ": not found\n");
 		return 1;
+	}
+
+	// -I REPL mode: run once per input token, replacing REPL in template args.
+	if (repl) {
+		char argbuf[8192];
+		sb_usize arg_off = 0;
+		int in_token = 0;
+		int saw_any = 0;
+		int saw_fail = 0;
+		char inbuf[4096];
+
+		for (;;) {
+			sb_i64 r = sb_sys_read(0, inbuf, sizeof(inbuf));
+			if (r < 0) sb_die_errno(argv0, "read", r);
+			if (r == 0) break;
+			for (sb_i64 bi = 0; bi < r; bi++) {
+				char c = inbuf[bi];
+				if (is_ws(c)) {
+					if (!in_token) continue;
+					if (arg_off + 1 > sizeof(argbuf)) {
+						(void)sb_write_str(2, argv0);
+						(void)sb_write_str(2, ": args too long\n");
+						return 1;
+					}
+					argbuf[arg_off++] = 0;
+					in_token = 0;
+					saw_any = 1;
+
+					char *tok = argbuf;
+					// Build argv.
+					char *argv_exec[256];
+					sb_u32 k = 0;
+					argv_exec[k++] = (char *)exec_path;
+
+					char repbuf[8192];
+					sb_usize roff = 0;
+					int replaced_any = 0;
+					for (int fi = 0; fi < fixed_n; fi++) {
+						const char *templ = fixed[fi];
+						if (!templ) templ = "";
+						// Check if templ contains repl.
+						int has = 0;
+						for (const char *tp = templ; *tp; tp++) {
+							if (*tp == repl[0] && sb_starts_with_n(tp, repl, repl_len)) {
+								has = 1;
+								break;
+							}
+						}
+						if (!has) {
+							if (k + 1 >= 256) sb_die_usage(argv0, "xargs: too many args");
+							argv_exec[k++] = fixed[fi];
+							continue;
+						}
+						replaced_any = 1;
+						sb_usize start = roff;
+						const char *tp = templ;
+						while (*tp) {
+							if (*tp == repl[0] && sb_starts_with_n(tp, repl, repl_len)) {
+								sb_usize tn = sb_strlen(tok);
+								if (roff + tn + 1 > sizeof(repbuf)) sb_die_usage(argv0, "xargs: args too long");
+								for (sb_usize ti = 0; ti < tn; ti++) repbuf[roff++] = tok[ti];
+								tp += repl_len;
+								continue;
+							}
+							if (roff + 2 > sizeof(repbuf)) sb_die_usage(argv0, "xargs: args too long");
+							repbuf[roff++] = *tp++;
+						}
+						repbuf[roff++] = 0;
+						if (k + 1 >= 256) sb_die_usage(argv0, "xargs: too many args");
+						argv_exec[k++] = &repbuf[start];
+					}
+
+					if (!replaced_any) {
+						// If template has no REPL anywhere, append the token.
+						if (k + 1 >= 256) sb_die_usage(argv0, "xargs: too many args");
+						argv_exec[k++] = tok;
+					}
+					argv_exec[k] = 0;
+
+					if (run_one(argv0, exec_path, argv_exec, envp) != 0) saw_fail = 1;
+					arg_off = 0;
+					continue;
+				}
+
+				// non-whitespace
+				if (!in_token) {
+					arg_off = 0;
+					in_token = 1;
+				}
+				if (arg_off + 1 > sizeof(argbuf)) {
+					(void)sb_write_str(2, argv0);
+					(void)sb_write_str(2, ": args too long\n");
+					return 1;
+				}
+				argbuf[arg_off++] = c;
+			}
+		}
+
+		if (in_token) {
+			if (arg_off + 1 > sizeof(argbuf)) {
+				(void)sb_write_str(2, argv0);
+				(void)sb_write_str(2, ": args too long\n");
+				return 1;
+			}
+			argbuf[arg_off++] = 0;
+			saw_any = 1;
+
+			char *tok = argbuf;
+			char *argv_exec[256];
+			sb_u32 k = 0;
+			argv_exec[k++] = (char *)exec_path;
+			char repbuf[8192];
+			sb_usize roff = 0;
+			int replaced_any = 0;
+			for (int fi = 0; fi < fixed_n; fi++) {
+				const char *templ = fixed[fi];
+				if (!templ) templ = "";
+				int has = 0;
+				for (const char *tp = templ; *tp; tp++) {
+					if (*tp == repl[0] && sb_starts_with_n(tp, repl, repl_len)) { has = 1; break; }
+				}
+				if (!has) {
+					argv_exec[k++] = fixed[fi];
+					continue;
+				}
+				replaced_any = 1;
+				sb_usize start = roff;
+				const char *tp = templ;
+				while (*tp) {
+					if (*tp == repl[0] && sb_starts_with_n(tp, repl, repl_len)) {
+						sb_usize tn = sb_strlen(tok);
+						if (roff + tn + 1 > sizeof(repbuf)) sb_die_usage(argv0, "xargs: args too long");
+						for (sb_usize ti = 0; ti < tn; ti++) repbuf[roff++] = tok[ti];
+						tp += repl_len;
+						continue;
+					}
+					repbuf[roff++] = *tp++;
+				}
+				repbuf[roff++] = 0;
+				argv_exec[k++] = &repbuf[start];
+			}
+			if (!replaced_any) argv_exec[k++] = tok;
+			argv_exec[k] = 0;
+			if (run_one(argv0, exec_path, argv_exec, envp) != 0) saw_fail = 1;
+		}
+
+		if (!saw_any) return 0;
+		return saw_fail ? 1 : 0;
 	}
 
 	// Cap by our fixed argv buffer.

@@ -8,9 +8,9 @@ static sb_usize sb_strnlen(const char *s, sb_usize max) {
 	return n;
 }
 
-static void mkdir_p(const char *argv0, const char *path) {
+static void mkdir_p(const char *argv0, const char *path, sb_u32 mode) {
 	if (!path || !*path) {
-		sb_die_usage(argv0, "mkdir [-p] DIR");
+		sb_die_usage(argv0, "mkdir [-p] [-m MODE] DIR");
 	}
 
 	// Keep this small and deterministic; refuse extremely long paths.
@@ -74,7 +74,7 @@ static void mkdir_p(const char *argv0, const char *path) {
 		cur_len += comp_len;
 		cur[cur_len] = 0;
 
-		sb_i64 r = sb_sys_mkdirat(SB_AT_FDCWD, cur, 0777);
+		sb_i64 r = sb_sys_mkdirat(SB_AT_FDCWD, cur, mode);
 		if (r < 0) {
 			sb_u64 e = (sb_u64)(-r);
 			if (e == (sb_u64)SB_EEXIST) {
@@ -96,6 +96,7 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 
 	const char *argv0 = (argc > 0 && argv && argv[0]) ? argv[0] : "mkdir";
 	int parents = 0;
+	sb_u32 mode = 0777;
 
 	int i = 1;
 	for (; i < argc; i++) {
@@ -111,20 +112,30 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 			parents = 1;
 			continue;
 		}
-		sb_die_usage(argv0, "mkdir [-p] DIR");
+		if (sb_streq(a, "-m")) {
+			if (i + 1 >= argc) {
+				sb_die_usage(argv0, "mkdir [-p] [-m MODE] DIR");
+			}
+			const char *m = argv[++i];
+			if (sb_parse_u32_octal(m, &mode) != 0 || mode > 07777u) {
+				sb_die_usage(argv0, "mkdir [-p] [-m MODE] DIR");
+			}
+			continue;
+		}
+		sb_die_usage(argv0, "mkdir [-p] [-m MODE] DIR");
 	}
 
 	if (argc - i != 1) {
-		sb_die_usage(argv0, "mkdir [-p] DIR");
+		sb_die_usage(argv0, "mkdir [-p] [-m MODE] DIR");
 	}
 
 	const char *path = argv[i] ? argv[i] : "";
 	if (parents) {
-		mkdir_p(argv0, path);
+		mkdir_p(argv0, path, mode);
 		return 0;
 	}
 
-	sb_i64 r = sb_sys_mkdirat(SB_AT_FDCWD, path, 0777);
+	sb_i64 r = sb_sys_mkdirat(SB_AT_FDCWD, path, mode);
 	if (r < 0) sb_die_errno(argv0, path, r);
 	return 0;
 }

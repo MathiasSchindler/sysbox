@@ -26,16 +26,17 @@ Mostly as an exercise in minimalism. But also:
 
 ## What's included?
 
-35 tools as of December 2025:
+55 tools as of December 2025:
 
 | Category | Tools |
 |----------|-------|
 | Basics | `true`, `false`, `echo`, `yes`, `sleep`, `pwd` |
-| Files | `cat`, `head`, `tail`, `tee`, `cp`, `mv`, `rm`, `ln`, `touch`, `mkdir`, `rmdir` |
-| Text | `sort`, `uniq`, `grep`, `tr`, `cut`, `wc` |
-| Info | `ls`, `stat`, `df`, `readlink`, `basename`, `dirname`, `uname`, `date` |
-| Scripting | `test`/`[`, `printf`, `seq` |
+| Files | `cat`, `head`, `tail`, `tee`, `cp`, `mv`, `rm`, `ln`, `touch`, `mkdir`, `rmdir`, `readlink`, `realpath` |
+| Text | `sort`, `uniq`, `grep`, `tr`, `cut`, `wc`, `sed`, `awk` |
+| Info | `ls`, `stat`, `df`, `basename`, `dirname`, `uname`, `date`, `id`, `whoami`, `which`, `nproc`, `hostname` |
+| Scripting | `sh`, `env`, `test`/`[`, `printf`, `seq`, `xargs`, `find` |
 | Permissions | `chmod`, `chown` |
+| System | `kill`, `ps`, `who`, `time`, `du`, `clear`, `cmp`, `diff` |
 
 ## Limitations
 
@@ -46,6 +47,7 @@ These tools are **not** drop-in replacements for GNU coreutils or BusyBox. They 
 - **Fixed buffers** — Some tools have size limits (e.g., `sort` caps at 4 MB of input).
 - **Minimal error messages** — Errors print errno numbers, not human-readable strings.
 - **Missing features** — Many common flags aren't implemented.
+- **Conservative recursion & symlinks** — Recursive operations have fixed depth limits, and tools avoid following symlinks (e.g. `cp` copies symlinks as symlinks).
 
 For details, see [spec.md](spec.md) and [status.md](status.md).
 
@@ -122,4 +124,4 @@ See [LICENSE](LICENSE) for the full CC0 text.
 
 ## Author
 
-Created by Mathias with substantial help from Claude (Anthropic) and GPT 5.2 using GitHub Copilot in VS Code.
+Created by Mathias with substantial help from Claude (Anthropic) and GPT-5.2 (Preview) using GitHub Copilot in VS Code.
