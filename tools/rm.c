@@ -1,16 +1,9 @@
 #include "../src/sb.h"
 
-#define RM_MAX_DEPTH 64
+#define rm_print_err sb_print_errno
 
-static void rm_print_err(const char *argv0, const char *path, sb_i64 err_neg) {
-	sb_u64 e = (err_neg < 0) ? (sb_u64)(-err_neg) : (sb_u64)err_neg;
-	(void)sb_write_str(2, argv0);
-	(void)sb_write_str(2, ": ");
-	(void)sb_write_str(2, path);
-	(void)sb_write_str(2, ": errno=");
-	sb_write_hex_u64(2, e);
-	(void)sb_write_str(2, "\n");
-}
+
+#define RM_MAX_DEPTH 64
 
 static int rm_unlinkat_maybe(sb_i32 dirfd, const char *name, sb_i32 flags, int force, sb_i64 *out_err) {
 	sb_i64 r = sb_sys_unlinkat(dirfd, name, flags);

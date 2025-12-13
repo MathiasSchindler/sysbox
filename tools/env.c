@@ -64,15 +64,6 @@ static int env_find_executable(char **envp, const char *cmd, char *out_path, sb_
 	return 0;
 }
 
-static void env_print_err(const char *argv0, const char *ctx, sb_i64 err_neg) {
-	sb_u64 e = (err_neg < 0) ? (sb_u64)(-err_neg) : (sb_u64)err_neg;
-	(void)sb_write_str(2, argv0);
-	(void)sb_write_str(2, ": ");
-	(void)sb_write_str(2, ctx);
-	(void)sb_write_str(2, ": errno=");
-	sb_write_hex_u64(2, e);
-	(void)sb_write_str(2, "\n");
-}
 
 static int env_is_assignment(const char *s) {
 	if (!s || !*s) return 0;
@@ -261,6 +252,6 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 
 	sb_i64 r = sb_sys_execve(exec_path, argv_exec, new_env);
 	// Only reaches here on error.
-	env_print_err(argv0, "execve", r);
+	sb_print_errno(argv0, "execve", r);
 	return 1;
 }

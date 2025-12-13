@@ -49,23 +49,9 @@ struct awk_prog {
 	sb_u32 str_pool_len;
 };
 
-static void awk_print_err(const char *argv0, const char *ctx, sb_i64 err_neg) {
-	sb_u64 e = (err_neg < 0) ? (sb_u64)(-err_neg) : (sb_u64)err_neg;
-	(void)sb_write_str(2, argv0);
-	(void)sb_write_str(2, ": ");
-	(void)sb_write_str(2, ctx);
-	(void)sb_write_str(2, ": errno=");
-	sb_write_hex_u64(2, e);
-	(void)sb_write_str(2, "\n");
-}
-
-static int awk_is_space(char c) {
-	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
-}
-
 static void awk_skip_spaces(const char **ps) {
 	const char *s = *ps;
-	while (*s && awk_is_space(*s)) s++;
+	while (*s && sb_is_space_ascii((sb_u8)*s)) s++;
 	*ps = s;
 }
 
@@ -84,35 +70,11 @@ static int awk_starts_with_kw(const char *s, const char *kw) {
 }
 
 static int awk_parse_u32(const char **ps, sb_u32 *out) {
-	sb_u32 v = 0;
-	const char *s = *ps;
-	if (*s < '0' || *s > '9') return -1;
-	while (*s >= '0' && *s <= '9') {
-		sb_u32 nv = v * 10u + (sb_u32)(*s - '0');
-		v = nv;
-		s++;
-	}
-	*ps = s;
-	*out = v;
-	return 0;
+	return sb_parse_u32_dec_prefix(ps, out);
 }
 
 static int awk_parse_i64(const char **ps, sb_i64 *out) {
-	const char *s = *ps;
-	int neg = 0;
-	if (*s == '+' || *s == '-') {
-		neg = (*s == '-');
-		s++;
-	}
-	if (*s < '0' || *s > '9') return -1;
-	sb_u64 v = 0;
-	while (*s >= '0' && *s <= '9') {
-		v = v * 10u + (sb_u64)(*s - '0');
-		s++;
-	}
-	*out = neg ? -(sb_i64)v : (sb_i64)v;
-	*ps = s;
-	return 0;
+	return sb_parse_i64_dec_prefix(ps, out);
 }
 
 // --- Tiny regex matcher (K&R style)
@@ -630,7 +592,7 @@ static int awk_process_fd(const char *argv0, const struct awk_prog *p, sb_i32 fd
 		if (rpos == rlen) {
 			sb_i64 r = sb_sys_read(fd, rbuf, sizeof(rbuf));
 			if (r < 0) {
-				awk_print_err(argv0, "read", r);
+				sb_print_errno(argv0, "read", r);
 				*any_fail = 1;
 				return -1;
 			}
@@ -718,7 +680,7 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 		}
 		sb_i64 fd = sb_sys_openat(SB_AT_FDCWD, path, SB_O_RDONLY | SB_O_CLOEXEC, 0);
 		if (fd < 0) {
-			awk_print_err(argv0, path, fd);
+			sb_print_errno(argv0, path, fd);
 			any_fail = 1;
 			continue;
 		}

@@ -23,14 +23,8 @@ static int parse_meminfo_u64(const char *buf, const char *key, sb_u64 *out) {
 		const char *q = line + klen;
 		while (*q && (*q == ' ' || *q == '\t')) q++;
 		sb_u64 v = 0;
-		int any = 0;
-		while (*q >= '0' && *q <= '9') {
-			any = 1;
-			sb_u64 d = (sb_u64)(*q - '0');
-			v = v * 10u + d;
-			q++;
-		}
-		if (!any) continue;
+		const char *r = q;
+		if (sb_parse_u64_dec_prefix(&r, &v) != 0) continue;
 		*out = v;
 		return 1;
 	}

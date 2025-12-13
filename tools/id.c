@@ -1,16 +1,7 @@
 #include "../src/sb.h"
 
-#define ID_MAX_GROUPS 256
 
-static void id_print_errno(const char *argv0, const char *ctx, sb_i64 err_neg) {
-	sb_u64 e = (err_neg < 0) ? (sb_u64)(-err_neg) : (sb_u64)err_neg;
-	(void)sb_write_str(2, argv0);
-	(void)sb_write_str(2, ": ");
-	(void)sb_write_str(2, ctx);
-	(void)sb_write_str(2, ": errno=");
-	sb_write_hex_u64(2, e);
-	(void)sb_write_str(2, "\n");
-}
+#define ID_MAX_GROUPS 256
 
 static sb_i64 id_write_kv_u64(const char *k, sb_u64 v) {
 	sb_i64 w = sb_write_str(1, k);
@@ -58,11 +49,11 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 	sb_i64 uid = sb_sys_getuid();
 	sb_i64 gid = sb_sys_getgid();
 	if (uid < 0) {
-		id_print_errno(argv0, "getuid", uid);
+		sb_print_errno(argv0, "getuid", uid);
 		return 1;
 	}
 	if (gid < 0) {
-		id_print_errno(argv0, "getgid", gid);
+		sb_print_errno(argv0, "getgid", gid);
 		return 1;
 	}
 
@@ -83,7 +74,7 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 
 	sb_i64 ng = sb_sys_getgroups(0, (sb_u32 *)0);
 	if (ng < 0) {
-		id_print_errno(argv0, "getgroups", ng);
+		sb_print_errno(argv0, "getgroups", ng);
 		return 1;
 	}
 	if (ng > ID_MAX_GROUPS) {
@@ -99,7 +90,7 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 	if (ng > 0) {
 		sb_i64 r = sb_sys_getgroups((sb_i32)ng, groups);
 		if (r < 0) {
-			id_print_errno(argv0, "getgroups", r);
+			sb_print_errno(argv0, "getgroups", r);
 			return 1;
 		}
 	}

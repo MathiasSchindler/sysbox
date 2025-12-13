@@ -162,6 +162,39 @@ struct sb_linux_dirent64 {
 	char d_name[];
 } __attribute__((packed));
 
+// Directory iteration helper (getdents64 loop).
+// Calls cb for each entry except "." and "..".
+// Notes:
+// - The passed name pointer is only valid until cb returns.
+// - Returns 0 on success, <0 on syscall/format error.
+typedef int (*sb_dirent_cb)(void *ctx, const char *name, sb_u8 d_type);
+sb_i64 sb_for_each_dirent(sb_i32 dirfd, sb_dirent_cb cb, void *ctx);
+
+// Tiny regex matcher (BRE-ish subset) shared by grep/sed.
+// Supported:
+// - Anchors: ^ and $
+// - Atoms: literals, ., character classes [...], escapes (\c => literal c)
+// - Quantifier: * (zero or more of previous atom)
+// - Capture groups: \( ... \) (up to SB_REGEX_MAX_CAPS)
+// Notes:
+// - This is intentionally small; it is not a full POSIX/GNU regex engine.
+// - Returns: 1 match, 0 no match, -1 invalid pattern.
+
+#define SB_REGEX_MAX_CAPS 9u
+#define SB_REGEX_ICASE 0x1u
+
+struct sb_regex_caps {
+	const char *start[SB_REGEX_MAX_CAPS + 1];
+	const char *end[SB_REGEX_MAX_CAPS + 1];
+	sb_u32 n; // number of captures (1..n)
+};
+
+int sb_regex_match_first(const char *re, const char *text, sb_u32 flags, const char **out_start, const char **out_end, struct sb_regex_caps *out_caps);
+
+SB_INLINE sb_u8 sb_tolower_ascii(sb_u8 c) {
+	return (c >= (sb_u8)'A' && c <= (sb_u8)'Z') ? (sb_u8)(c + (sb_u8)('a' - 'A')) : c;
+}
+
 // Generic syscall helpers (Linux x86_64)
 SB_INLINE sb_i64 sb_syscall0(sb_i64 n) {
 	sb_i64 ret;
@@ -397,13 +430,29 @@ int sb_parse_u64_dec(const char *s, sb_u64 *out);
 int sb_parse_u32_dec(const char *s, sb_u32 *out);
 int sb_parse_u32_octal(const char *s, sb_u32 *out);
 int sb_parse_i64_dec(const char *s, sb_i64 *out);
+int sb_parse_i32_dec(const char *s, sb_i32 *out);
 int sb_parse_uid_gid(const char *s, sb_u32 *out_uid, sb_u32 *out_gid);
+
+// Parsing helpers for mini-languages/tokenizers.
+// - *_prefix(): parses a leading token and advances *ps.
+// - *_n(): parses exactly n bytes (not NUL-terminated).
+int sb_parse_u64_dec_prefix(const char **ps, sb_u64 *out);
+int sb_parse_u32_dec_prefix(const char **ps, sb_u32 *out);
+int sb_parse_i64_dec_prefix(const char **ps, sb_i64 *out);
+int sb_parse_u32_dec_n(const char *s, sb_usize n, sb_u32 *out);
 sb_i64 sb_write_all(sb_i32 fd, const void *buf, sb_usize len);
 sb_i64 sb_write_str(sb_i32 fd, const char *s);
 void sb_write_hex_u64(sb_i32 fd, sb_u64 v);
 sb_i64 sb_write_u64_dec(sb_i32 fd, sb_u64 v);
 sb_i64 sb_write_i64_dec(sb_i32 fd, sb_i64 v);
 
+SB_INLINE int sb_is_space_ascii(sb_u8 c) {
+	return (c == (sb_u8)' ' || c == (sb_u8)'\n' || c == (sb_u8)'\t' || c == (sb_u8)'\r' || c == (sb_u8)'\v' || c == (sb_u8)'\f');
+}
+
 // Common UX helpers
 SB_NORETURN void sb_die_usage(const char *argv0, const char *usage);
 SB_NORETURN void sb_die_errno(const char *argv0, const char *ctx, sb_i64 err_neg);
+
+void sb_print_errno(const char *argv0, const char *ctx, sb_i64 err_neg);
+void sb_join_path_or_die(const char *argv0, const char *base, const char *name, char *out, sb_usize out_cap);

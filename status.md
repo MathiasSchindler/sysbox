@@ -21,7 +21,7 @@ Notes:
 | `col` | Handles `\b` and `\r` overstrikes | Full traditional behavior | Fixed max columns |
 | `column` | Align whitespace-delimited columns | More modes/delimiters | Fixed input/rows/cols caps |
 | `cp` | Regular files + symlinks; `-r/-R`, `-p` (also supports bundled `-rp`) | — | Symlinks copied as symlinks; recursion depth capped |
-| `cut` | `-f` tab-delimited fields | `-d`, byte/char modes | Char mode implies Unicode decisions |
+| `cut` | `-f` fields; `-d` delimiter (single-byte) | Byte/char modes | Char mode implies Unicode decisions |
 | `date` | Epoch seconds | Formatting | Uses `clock_gettime` |
 | `df` | `statfs`-based totals; `-h` (K/M/G/T), `-T` (type hex), `-H` (header) | Headers formatting/padding; filesystem name decoding | Output values are derived from `statfs` |
 | `diff` | Minimal line-based diff (first mismatch) | Full diffs, unified format | Useful for debugging |
@@ -32,7 +32,7 @@ Notes:
 | `false` | Exit 1 | — | — |
 | `find` | `-name` (glob `*` `?`), `-type`, `-mindepth/-maxdepth` | Full expression language, `-exec`, `-prune` | Does not follow symlink dirs |
 | `free` | Reads `/proc/meminfo`; prints mem/swap totals | Headers; human readable; more fields | Values are KiB from meminfo |
-| `grep` | Fixed-string matching (`-i/-v/-c/-n/-q`) | Regex | Kept intentionally small |
+| `grep` | Tiny regex matching (`-i/-v/-c/-n/-q`); `-F` fixed-string | Broader regex features | Regex is a small shared engine (BRE-ish subset) |
 | `head` | `-n N`, `-c N` | — | — |
 | `hexdump` | Canonical hex+ASCII dump | Flags/offset controls | Fixed 16-byte rows |
 | `hostname` | Prints `uname` nodename | Set hostname | Syscall-only print |
@@ -53,14 +53,14 @@ Notes:
 | `rev` | Reverse bytes per line | UTF-8-aware reverse | Fixed max line length |
 | `rm` | Unlink files; `-f`, `-r`, `-d` (also supports bundled short flags like `-rf`) | — | Recursion depth capped |
 | `rmdir` | Remove empty dir; `-p` | — | — |
-| `sed` | `s/REGEX/REPL/[g][p]`, `d`, `-n`, repeatable `-e`; minimal addressing (`N` and `$`) | More commands; address ranges; capture groups; file/hold space | Regex subset: `.^$.*` + escapes |
+| `sed` | `s/REGEX/REPL/[g][p]`, `d`, `p`, `-n`, repeatable `-e`; addressing (`N`, `$`, `/REGEX/`), ranges; hold space (`h/H/g/G/x`) | More commands; broader compatibility | Regex is a small shared engine; captures via `\(\)` + `\1..\9` |
 | `seq` | Integer sequences | Floats/formatting | `seq LAST|FIRST LAST|FIRST INCR LAST` |
 | `sh` | `-c CMD` and `sh FILE [args...]`; `;` and newlines; `|`; `&&/||`; `<`, `>`, `>>`; basic quotes; `cd`, `exit`; minimal `if/while/for`; minimal `$NAME` expansion (used by `for`); positional params `$0..$N`, `$#`, `$@`, `$*` | Variables (beyond `for`); globbing; job control | Minimal shell |
 | `sleep` | Seconds | Fractions | Uses `nanosleep` |
 | `sort` | In-memory line sort; `-r`, `-u`, `-n` | External sort; keys; locale | — |
 | `stat` | Basic file info; `-l` lstat; default follows symlinks | Formatting options | Prints type/perm/uid/gid/size |
 | `strings` | Printable ASCII runs; `-n N` | Encodings; offsets | Streaming; fixed prefix buffer |
-| `tail` | `-n N` (seek on regular files, streaming fallback), `-c N` | Follow mode (`-f`) | — |
+| `tail` | `-n N` (seek on regular files, streaming fallback), `-c N`, `-f` follow (single file) | — | — |
 | `tee` | Write stdin to stdout + files; `-a` append | — | Multi-file fanout |
 | `time` | Run cmd; print elapsed time | Formatting/options | Uses `clock_gettime` |
 | `touch` | Create if missing; set times (`-t`) | — | Uses `utimensat` |

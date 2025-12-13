@@ -22,38 +22,6 @@ struct find_expr {
 	sb_i32 maxdepth;
 };
 
-static void find_print_err(const char *argv0, const char *path, sb_i64 err_neg) {
-	sb_u64 e = (err_neg < 0) ? (sb_u64)(-err_neg) : (sb_u64)err_neg;
-	(void)sb_write_str(2, argv0);
-	(void)sb_write_str(2, ": ");
-	(void)sb_write_str(2, path);
-	(void)sb_write_str(2, ": errno=");
-	sb_write_hex_u64(2, e);
-	(void)sb_write_str(2, "\n");
-}
-
-static void find_join_path_or_die(const char *argv0, const char *base, const char *name, char out[4096]) {
-	sb_usize blen = sb_strlen(base);
-	sb_usize nlen = sb_strlen(name);
-	int need_slash = 1;
-
-	if (blen == 0 || (blen == 1 && base[0] == '.')) {
-		if (nlen + 1 > 4096) sb_die_errno(argv0, "path", (sb_i64)-SB_EINVAL);
-		for (sb_usize i = 0; i < nlen; i++) out[i] = name[i];
-		out[nlen] = 0;
-		return;
-	}
-	if (blen > 0 && base[blen - 1] == '/') need_slash = 0;
-
-	sb_usize total = blen + (need_slash ? 1u : 0u) + nlen;
-	if (total + 1 > 4096) sb_die_errno(argv0, "path", (sb_i64)-SB_EINVAL);
-	for (sb_usize i = 0; i < blen; i++) out[i] = base[i];
-	sb_usize off = blen;
-	if (need_slash) out[off++] = '/';
-	for (sb_usize i = 0; i < nlen; i++) out[off + i] = name[i];
-	out[total] = 0;
-}
-
 static const char *find_basename(const char *path) {
 	if (!path) return "";
 	const char *last = path;
@@ -109,23 +77,6 @@ static int find_match_name(const char *pat, const char *s) {
 	return *p == 0;
 }
 
-static int find_parse_i32(const char *s, sb_i32 *out) {
-	sb_i32 v = 0;
-	int neg = 0;
-	if (!s || !*s) return -1;
-	if (*s == '+' || *s == '-') {
-		neg = (*s == '-');
-		s++;
-	}
-	if (*s < '0' || *s > '9') return -1;
-	while (*s >= '0' && *s <= '9') {
-		v = (sb_i32)(v * 10 + (sb_i32)(*s - '0'));
-		s++;
-	}
-	*out = neg ? -v : v;
-	return *s ? -1 : 0;
-}
-
 static int find_should_print(const struct find_expr *e, const char *path, const struct sb_stat *st, sb_i32 depth) {
 	if (e->has_mindepth && depth < e->mindepth) return 0;
 	if (e->name_pat) {
@@ -144,9 +95,28 @@ static void find_print_path_or_die(const char *argv0, const char *path) {
 	if (sb_write_all(1, "\n", 1) < 0) sb_die_errno(argv0, "write", -1);
 }
 
+static void find_walk(const char *argv0, const struct find_expr *e, const char *path, sb_i32 depth, int *any_fail);
+
+struct find_dir_iter_ctx {
+	const char *argv0;
+	const struct find_expr *expr;
+	const char *path;
+	sb_i32 depth;
+	int *any_fail;
+};
+
+static int find_dir_iter_cb(void *ctxp, const char *name, sb_u8 d_type) {
+	(void)d_type;
+	struct find_dir_iter_ctx *ctx = (struct find_dir_iter_ctx *)ctxp;
+	char child[4096];
+	sb_join_path_or_die(ctx->argv0, ctx->path, name, child, (sb_usize)sizeof(child));
+	find_walk(ctx->argv0, ctx->expr, child, ctx->depth + 1, ctx->any_fail);
+	return 0;
+}
+
 static void find_walk(const char *argv0, const struct find_expr *e, const char *path, sb_i32 depth, int *any_fail) {
 	if (depth > 64) {
-		find_print_err(argv0, path, (sb_i64)-SB_ELOOP);
+		sb_print_errno(argv0, path, (sb_i64)-SB_ELOOP);
 		*any_fail = 1;
 		return;
 	}
@@ -154,7 +124,7 @@ static void find_walk(const char *argv0, const struct find_expr *e, const char *
 	struct sb_stat st;
 	sb_i64 sr = sb_sys_newfstatat(SB_AT_FDCWD, path, &st, SB_AT_SYMLINK_NOFOLLOW);
 	if (sr < 0) {
-		find_print_err(argv0, path, sr);
+		sb_print_errno(argv0, path, sr);
 		*any_fail = 1;
 		return;
 	}
@@ -176,33 +146,24 @@ static void find_walk(const char *argv0, const struct find_expr *e, const char *
 	if (dfd < 0) {
 		// If it's a symlink, just don't recurse.
 		if ((sb_u64)(-dfd) == (sb_u64)SB_ELOOP) return;
-		find_print_err(argv0, path, dfd);
+		sb_print_errno(argv0, path, dfd);
 		*any_fail = 1;
 		return;
 	}
 
-	sb_u8 buf[32768];
-	for (;;) {
-		sb_i64 nread = sb_sys_getdents64((sb_i32)dfd, buf, (sb_u32)sizeof(buf));
-		if (nread < 0) {
-			(void)sb_sys_close((sb_i32)dfd);
-			find_print_err(argv0, "getdents64", nread);
-			*any_fail = 1;
-			return;
-		}
-		if (nread == 0) break;
-
-		sb_u32 bpos = 0;
-		while (bpos < (sb_u32)nread) {
-			struct sb_linux_dirent64 *d = (struct sb_linux_dirent64 *)(buf + bpos);
-			const char *name = d->d_name;
-			if (!sb_is_dot_or_dotdot(name)) {
-				char child[4096];
-				find_join_path_or_die(argv0, path, name, child);
-				find_walk(argv0, e, child, depth + 1, any_fail);
-			}
-			bpos += d->d_reclen;
-		}
+	struct find_dir_iter_ctx ictx = {
+		.argv0 = argv0,
+		.expr = e,
+		.path = path,
+		.depth = depth,
+		.any_fail = any_fail,
+	};
+	sb_i64 ir = sb_for_each_dirent((sb_i32)dfd, find_dir_iter_cb, &ictx);
+	if (ir < 0) {
+		(void)sb_sys_close((sb_i32)dfd);
+		sb_print_errno(argv0, "getdents64", ir);
+		*any_fail = 1;
+		return;
 	}
 
 	(void)sb_sys_close((sb_i32)dfd);
@@ -258,7 +219,7 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 			i++;
 			if (i >= argc || !argv[i]) sb_die_usage(argv0, "find [PATH...] [-name PAT] [-type f|d|l] [-mindepth N] [-maxdepth N] [-print]");
 			sb_i32 v = 0;
-			if (find_parse_i32(argv[i], &v) != 0 || v < 0) sb_die_usage(argv0, "find: -mindepth expects non-negative integer");
+			if (sb_parse_i32_dec(argv[i], &v) != 0 || v < 0) sb_die_usage(argv0, "find: -mindepth expects non-negative integer");
 			expr.has_mindepth = 1;
 			expr.mindepth = v;
 			continue;
@@ -267,7 +228,7 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 			i++;
 			if (i >= argc || !argv[i]) sb_die_usage(argv0, "find [PATH...] [-name PAT] [-type f|d|l] [-mindepth N] [-maxdepth N] [-print]");
 			sb_i32 v = 0;
-			if (find_parse_i32(argv[i], &v) != 0 || v < 0) sb_die_usage(argv0, "find: -maxdepth expects non-negative integer");
+			if (sb_parse_i32_dec(argv[i], &v) != 0 || v < 0) sb_die_usage(argv0, "find: -maxdepth expects non-negative integer");
 			expr.has_maxdepth = 1;
 			expr.maxdepth = v;
 			continue;

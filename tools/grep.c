@@ -30,16 +30,6 @@ static sb_u8 grep_tolower_ascii(sb_u8 c) {
 	return c;
 }
 
-static void grep_print_errno(const char *argv0, const char *ctx, sb_i64 err_neg) {
-	sb_u64 e = (err_neg < 0) ? (sb_u64)(-err_neg) : (sb_u64)err_neg;
-	(void)sb_write_str(2, argv0);
-	(void)sb_write_str(2, ": ");
-	(void)sb_write_str(2, ctx);
-	(void)sb_write_str(2, ": errno=");
-	sb_write_hex_u64(2, e);
-	(void)sb_write_str(2, "\n");
-}
-
 static int grep_fill(struct grep_reader *r, const char *argv0) {
 	if (r->eof) {
 		return 0;
@@ -126,6 +116,18 @@ static int grep_line_matches(const sb_u8 *line, sb_u32 line_len, const sb_u8 *pa
 	return 0;
 }
 
+
+static int grep_line_matches_regex(const char *pattern, sb_u8 *line, sb_u32 line_len, sb_u32 flags) {
+	// The line buffer is guaranteed to have room for a trailing NUL.
+	if (line_len >= GREP_LINE_MAX) return 0;
+	line[line_len] = 0;
+	const char *ms = 0;
+	const char *me = 0;
+	int r = sb_regex_match_first(pattern, (const char *)line, flags, &ms, &me, 0);
+	if (r < 0) return -1;
+	return r;
+}
+
 static sb_i64 grep_write_line(const sb_u8 *line, sb_u32 line_len, int with_lineno, sb_u64 lineno) {
 	sb_i64 w;
 	if (with_lineno) {
@@ -140,7 +142,7 @@ static sb_i64 grep_write_line(const sb_u8 *line, sb_u32 line_len, int with_linen
 	return w;
 }
 
-static int grep_fd(const char *argv0, sb_i32 fd, const sb_u8 *pat, sb_u32 pat_len, int opt_i, int opt_v, int opt_c, int opt_n, int opt_q, sb_u64 *io_count, int *io_matched) {
+static int grep_fd(const char *argv0, sb_i32 fd, const char *pattern, const sb_u8 *pat, sb_u32 pat_len, int use_fixed, int opt_i, int opt_v, int opt_c, int opt_n, int opt_q, sb_u64 *io_count, int *io_matched) {
 	struct grep_reader r;
 	r.fd = fd;
 	r.pos = 0;
@@ -158,7 +160,16 @@ static int grep_fd(const char *argv0, sb_i32 fd, const sb_u8 *pat, sb_u32 pat_le
 		}
 		lineno++;
 
-		int m = grep_line_matches(line, line_len, pat, pat_len, opt_i);
+		int m;
+		if (use_fixed) {
+			m = grep_line_matches(line, line_len, pat, pat_len, opt_i);
+		} else {
+			sb_u32 flags = opt_i ? SB_REGEX_ICASE : 0u;
+			m = grep_line_matches_regex(pattern, line, line_len, flags);
+			if (m < 0) {
+				sb_die_usage(argv0, "grep [-i] [-v] [-c] [-n] [-q] [-F] PATTERN [FILE...] (invalid regex)");
+			}
+		}
 		if (opt_v) {
 			m = !m;
 		}
@@ -192,6 +203,7 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 	int opt_c = 0;
 	int opt_n = 0;
 	int opt_q = 0;
+	int opt_F = 0;
 
 	int i = 1;
 	for (; i < argc; i++) {
@@ -224,35 +236,49 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 			opt_q = 1;
 			continue;
 		}
-		sb_die_usage(argv0, "grep [-i] [-v] [-c] [-n] [-q] PATTERN [FILE...]");
+		if (sb_streq(a, "-F")) {
+			opt_F = 1;
+			continue;
+		}
+		sb_die_usage(argv0, "grep [-i] [-v] [-c] [-n] [-q] [-F] PATTERN [FILE...]");
 	}
 
 	if (i >= argc || !argv[i]) {
-		sb_die_usage(argv0, "grep [-i] [-v] [-c] [-n] [-q] PATTERN [FILE...]");
+		sb_die_usage(argv0, "grep [-i] [-v] [-c] [-n] [-q] [-F] PATTERN [FILE...]");
 	}
 	const char *pattern = argv[i++];
 
 	sb_u8 pat[GREP_LINE_MAX];
 	sb_usize pat_len_usz = sb_strlen(pattern);
 	if (pat_len_usz >= (sb_usize)GREP_LINE_MAX) {
-		sb_die_usage(argv0, "grep [-i] [-v] [-c] [-n] [-q] PATTERN [FILE...]");
+		sb_die_usage(argv0, "grep [-i] [-v] [-c] [-n] [-q] [-F] PATTERN [FILE...]");
 	}
 	sb_u32 pat_len = (sb_u32)pat_len_usz;
 	for (sb_u32 k = 0; k < pat_len; k++) {
 		pat[k] = (sb_u8)pattern[k];
 	}
 
+	if (!opt_F) {
+		// Validate the pattern once up front.
+		const char *ms = 0;
+		const char *me = 0;
+		int r = sb_regex_match_first(pattern, "", opt_i ? SB_REGEX_ICASE : 0u, &ms, &me, 0);
+		if (r < 0) {
+			sb_die_usage(argv0, "grep [-i] [-v] [-c] [-n] [-q] [-F] PATTERN [FILE...] (invalid regex)");
+		}
+	}
+
 	int matched = 0;
 	sb_u64 count = 0;
 
 	if (i >= argc) {
-		(void)grep_fd(argv0, 0, pat, pat_len, opt_i, opt_v, opt_c, opt_n, opt_q, &count, &matched);
+		(void)grep_fd(argv0, 0, pattern, pat, pat_len, opt_F, opt_i, opt_v, opt_c, opt_n, opt_q, &count, &matched);
 	} else {
 		for (; i < argc; i++) {
 			const char *path = argv[i];
 			if (!path) break;
 			if (sb_streq(path, "-")) {
-				(void)grep_fd(argv0, 0, pat, pat_len, opt_i, opt_v, opt_c, opt_n, opt_q, &count, &matched);
+				(void)grep_fd(argv0, 0, pattern, pat, pat_len, opt_F, opt_i, opt_v, opt_c, opt_n, opt_q, &count, &matched);
 				if (opt_q && matched) {
 					return 0;
 				}
@@ -260,10 +286,10 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 			}
 			sb_i64 fd = sb_sys_openat(SB_AT_FDCWD, path, SB_O_RDONLY | SB_O_CLOEXEC, 0);
 			if (fd < 0) {
-				grep_print_errno(argv0, path, fd);
+				sb_print_errno(argv0, path, fd);
 				continue;
 			}
-			(void)grep_fd(argv0, (sb_i32)fd, pat, pat_len, opt_i, opt_v, opt_c, opt_n, opt_q, &count, &matched);
+			(void)grep_fd(argv0, (sb_i32)fd, pattern, pat, pat_len, opt_F, opt_i, opt_v, opt_c, opt_n, opt_q, &count, &matched);
 			(void)sb_sys_close((sb_i32)fd);
 			if (opt_q && matched) {
 				return 0;

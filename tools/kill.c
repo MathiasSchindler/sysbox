@@ -1,15 +1,5 @@
 #include "../src/sb.h"
 
-static void kill_print_errno(const char *argv0, const char *ctx, sb_i64 err_neg) {
-	sb_u64 e = (err_neg < 0) ? (sb_u64)(-err_neg) : (sb_u64)err_neg;
-	(void)sb_write_str(2, argv0);
-	(void)sb_write_str(2, ": ");
-	(void)sb_write_str(2, ctx);
-	(void)sb_write_str(2, ": errno=");
-	sb_write_hex_u64(2, e);
-	(void)sb_write_str(2, "\n");
-}
-
 static int kill_is_digit(char c) {
 	return (c >= '0' && c <= '9');
 }
@@ -91,7 +81,7 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 		}
 		sb_i64 r = sb_sys_kill((sb_i32)pid64, sig);
 		if (r < 0) {
-			kill_print_errno(argv0, pid_s, r);
+			sb_print_errno(argv0, pid_s, r);
 			any_fail = 1;
 		}
 	}

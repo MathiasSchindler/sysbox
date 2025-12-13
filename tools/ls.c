@@ -2,38 +2,6 @@
 
 #define LS_MAX_DEPTH 64
 
-static void ls_print_err(const char *argv0, const char *path, sb_i64 err_neg) {
-	sb_u64 e = (err_neg < 0) ? (sb_u64)(-err_neg) : (sb_u64)err_neg;
-	(void)sb_write_str(2, argv0);
-	(void)sb_write_str(2, ": ");
-	(void)sb_write_str(2, path);
-	(void)sb_write_str(2, ": errno=");
-	sb_write_hex_u64(2, e);
-	(void)sb_write_str(2, "\n");
-}
-
-static void ls_join_path_or_die(const char *argv0, const char *base, const char *name, char out[4096]) {
-	// Refuse overly long paths to keep things deterministic.
-	sb_usize blen = sb_strlen(base);
-	sb_usize nlen = sb_strlen(name);
-	int need_slash = 1;
-	if (blen == 0 || (blen == 1 && base[0] == '.')) {
-		// Use just the name.
-		if (nlen + 1 > 4096) sb_die_errno(argv0, "path", (sb_i64)-SB_EINVAL);
-		for (sb_usize i = 0; i < nlen; i++) out[i] = name[i];
-		out[nlen] = 0;
-		return;
-	}
-	if (blen > 0 && base[blen - 1] == '/') need_slash = 0;
-	sb_usize total = blen + (need_slash ? 1u : 0u) + nlen;
-	if (total + 1 > 4096) sb_die_errno(argv0, "path", (sb_i64)-SB_EINVAL);
-	for (sb_usize i = 0; i < blen; i++) out[i] = base[i];
-	sb_usize off = blen;
-	if (need_slash) out[off++] = '/';
-	for (sb_usize i = 0; i < nlen; i++) out[off + i] = name[i];
-	out[total] = 0;
-}
-
 static void ls_write_mode(const char *argv0, sb_u32 mode) {
 	char p[10];
 	p[0] = (mode & 0400u) ? 'r' : '-';
@@ -105,7 +73,7 @@ static void ls_print_long_at(const char *argv0, sb_i32 dirfd, const char *name, 
 
 static void ls_dir(const char *argv0, const char *path, int show_all, int long_mode, int human, int recursive, int is_first, int depth, int *any_fail) {
 	if (depth > LS_MAX_DEPTH) {
-		ls_print_err(argv0, path, (sb_i64)-SB_ELOOP);
+		sb_print_errno(argv0, path, (sb_i64)-SB_ELOOP);
 		if (any_fail) *any_fail = 1;
 		return;
 	}
@@ -196,7 +164,7 @@ static void ls_dir(const char *argv0, const char *path, int show_all, int long_m
 		for (sb_u32 si = 0; si < sub_n; si++) {
 			const char *subname = subpool + sub_offs[si];
 			char child[4096];
-			ls_join_path_or_die(argv0, path, subname, child);
+			sb_join_path_or_die(argv0, path, subname, child, (sb_usize)sizeof(child));
 			ls_dir(argv0, child, show_all, long_mode, human, recursive, 0, depth + 1, any_fail);
 		}
 	}

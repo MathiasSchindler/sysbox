@@ -355,6 +355,41 @@ OUT=$("$BIN/tail" -c 3 <"$TMP/bytes")
 OUT=$(printf 'abcdef' | "$BIN/tail" -c 3)
 [ "$OUT" = "def" ] || fail "tail -c 3 (pipe) unexpected output"
 
+# --- tail: -f follow mode (single file) ---
+mark "tail -f"
+TAILF="$TMP/tailf_in"
+TAILF_OUT="$TMP/tailf_out"
+printf 'a\n' >"$TAILF"
+set +e
+"$BIN/tail" -n 0 -f "$TAILF" >"$TAILF_OUT" 2>/dev/null &
+TPID=$!
+set -e
+printf 'b\n' >>"$TAILF"  # may race with tail startup
+sleep 0.02
+printf 'c\n' >>"$TAILF"  # should be observed reliably
+
+# Poll until we see the second line.
+j=0
+OUT=""
+while [ $j -lt 200 ]; do
+  OUT=$(cat "$TAILF_OUT" 2>/dev/null)
+  case "$OUT" in
+    (*c*) break ;;
+  esac
+  sleep 0.01
+  j=$((j + 1))
+done
+
+$BIN/kill -9 "$TPID" >/dev/null 2>&1 || true
+set +e
+wait "$TPID" >/dev/null 2>&1
+set -e
+OUT=$(cat "$TAILF_OUT")
+case "$OUT" in
+  (*c*) : ;;
+  (*) fail "tail -f unexpected output: '$OUT'" ;;
+esac
+
 # --- sort: in-memory, bytewise line sorting ---
 mark "sort"
 printf 'b\na\nc\n' >"$TMP/sort1"
@@ -508,6 +543,12 @@ printf '\n\n' >"$TMP/cut_expected4"
 printf 'onlyone\n\n' >"$TMP/cut_in2"
 "$BIN/cut" -f 2 <"$TMP/cut_in2" >"$TMP/cut_out4" || fail "cut out-of-range field failed"
 cmp -s "$TMP/cut_expected4" "$TMP/cut_out4" || fail "cut out-of-range field mismatch"
+
+# --- cut: custom delimiter (-d) ---
+printf 'a:b:c\n1:2\n' >"$TMP/cut_in3"
+printf 'b\n2\n' >"$TMP/cut_expected5"
+"$BIN/cut" -d : -f 2 <"$TMP/cut_in3" >"$TMP/cut_out5" || fail "cut -d : -f 2 failed"
+cmp -s "$TMP/cut_expected5" "$TMP/cut_out5" || fail "cut -d : -f 2 mismatch"
 
 # --- date: epoch seconds (numeric) ---
 mark "date/sleep/kill/id/which"
@@ -1058,7 +1099,7 @@ two" ] || fail "sh >> file content mismatch"
 OUT=$($BIN/sh -c "$BIN/cat < $TMP/sh_app | $BIN/wc -l")
 [ "$OUT" = "2" ] || fail "sh redirect < / pipeline failed: '$OUT'"
 
-# --- sed: substitution-only subset ---
+# --- sed: minimal subset ---
 mark "sed"
 OUT=$(printf 'foo\n' | $BIN/sed 's/o/a/')
 [ "$OUT" = "fao" ] || fail "sed s/// unexpected: '$OUT'"
@@ -1079,6 +1120,22 @@ SED_F="$TMP/sed_in"
 printf 'hello\n' >"$SED_F"
 OUT=$($BIN/sed 's/ello/OLA/' "$SED_F")
 [ "$OUT" = "hOLA" ] || fail "sed file unexpected: '$OUT'"
+
+# capture groups (BRE-ish: \( ... \) and \1)
+OUT=$(printf 'abc\n' | $BIN/sed 's/^\(a.*\)$/X\1Y/')
+[ "$OUT" = "XabcY" ] || fail "sed capture group unexpected: '$OUT'"
+
+# address ranges
+OUT=$(printf 'a\nb\nc\nd\n' | $BIN/sed '2,3s/.*/X/')
+[ "$OUT" = "a
+X
+X
+d" ] || fail "sed address range unexpected: '$OUT'"
+
+# hold space: copy first line into hold, then replace second line with it
+OUT=$(printf 'a\nb\n' | $BIN/sed -e '1h' -e '2g')
+[ "$OUT" = "a
+a" ] || fail "sed hold space unexpected: '$OUT'"
 
 # --- awk: minimal subset (print/fields/pattern) ---
 mark "awk"
@@ -1310,7 +1367,7 @@ RC=$?
 set -e
 [ $RC -eq 2 ] || fail "[ missing closing ] should be usage error (got $RC)"
 
-# --- grep: fixed-string pattern matching ---
+# --- grep: regex pattern matching ---
 GREP_F="$TMP/grep_file"
 printf 'a\nFoo\nbar\nFOO\n' >"$GREP_F"
 
@@ -1334,6 +1391,14 @@ OUT=$($BIN/grep -n -i foo "$GREP_F")
 
 OUT=$(printf 'xx\nneedle\nyy\n' | $BIN/grep needle)
 [ "$OUT" = "needle" ] || fail "grep stdin unexpected: '$OUT'"
+
+OUT=$($BIN/grep '^Fo.$' "$GREP_F")
+[ "$OUT" = "Foo" ] || fail "grep regex anchors/dot unexpected: '$OUT'"
+
+GREP_F2="$TMP/grep_file2"
+printf 'a.b\nab\n' >"$GREP_F2"
+OUT=$($BIN/grep -F '.' "$GREP_F2")
+[ "$OUT" = "a.b" ] || fail "grep -F fixed-string unexpected: '$OUT'"
 
 set +e
 $BIN/grep -q needle "$GREP_F" >/dev/null 2>&1

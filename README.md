@@ -54,7 +54,7 @@ For details, see [spec.md](spec.md) and [status.md](status.md).
 
 ```sh
 make          # Build all tools to bin/
-make test     # Run the test suite (smoke + integration)
+make test     # Run the test suite (smoke + integration + recipes)
 make clean    # Remove build artifacts
 ```
 
@@ -67,7 +67,7 @@ Optional: Install `sstrip` from [ELFkickers](https://www.muppetlabs.com/~breadbo
 
 ## Binary sizes
 
-Example sizes (with LTO, stripped):
+Example sizes (with LTO, stripped; varies by toolchain and build flags):
 
 ```
 bin/true       440 bytes
@@ -99,7 +99,9 @@ sysbox/
 │   └── minimal.ld   # Custom linker script for small ELFs
 ├── tests/
 │   ├── run.sh       # Test runner (host shell)
-│   └── integration.sh # Runs tests using sysbox `sh` and sysbox tools
+│   ├── integration.sh # Runs tests using sysbox `sh` and sysbox tools
+│   ├── recipes.sh     # Longer sysbox-only pipelines / script-ish tests
+│   └── data/          # Deterministic test fixtures
 ├── spec.md          # Detailed specifications
 └── status.md        # Implementation status tracker
 ```
@@ -122,7 +124,7 @@ The custom linker script (`scripts/minimal.ld`) reduces ELF overhead by merging 
 
 This project is released into the public domain. You can copy, modify, and distribute it without permission or attribution.
 
-Allmost all of this code was generated with assistance from large language models (LLMs).
+Almost all of this code was generated with assistance from large language models (LLMs).
 
 See [LICENSE](LICENSE) for the full CC0 text.
 

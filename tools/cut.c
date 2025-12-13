@@ -20,17 +20,7 @@ static int cut_field_selected(const sb_u32 *bits, sb_u32 field) {
 }
 
 static SB_NORETURN void cut_die_usage(const char *argv0) {
-	sb_die_usage(argv0, "cut -f LIST [FILE...]");
-}
-
-static void cut_print_errno(const char *argv0, const char *ctx, sb_i64 err_neg) {
-	sb_u64 e = (err_neg < 0) ? (sb_u64)(-err_neg) : (sb_u64)err_neg;
-	(void)sb_write_str(2, argv0);
-	(void)sb_write_str(2, ": ");
-	(void)sb_write_str(2, ctx);
-	(void)sb_write_str(2, ": errno=");
-	sb_write_hex_u64(2, e);
-	(void)sb_write_str(2, "\n");
+	sb_die_usage(argv0, "cut -f LIST [-d DELIM] [FILE...]");
 }
 
 static int cut_parse_u32_dec_range(const char *s, sb_u32 *out) {
@@ -98,6 +88,7 @@ static void cut_parse_list_or_die(const char *argv0, const char *list, sb_u32 *b
 
 struct cut_state {
 	const sb_u32 *bits;
+	sb_u8 delim;
 	sb_u32 field;
 	int at_field_start;
 	int printing;
@@ -117,7 +108,7 @@ static void cut_maybe_start_field(const char *argv0, struct cut_state *st) {
 	}
 	st->printing = cut_field_selected(st->bits, st->field);
 	if (st->printing && st->printed_any) {
-		sb_i64 w = sb_write_all(1, "\t", 1);
+		sb_i64 w = sb_write_all(1, &st->delim, 1);
 		if (w < 0) sb_die_errno(argv0, "write", w);
 	}
 	st->at_field_start = 0;
@@ -130,7 +121,7 @@ static void cut_feed_byte(const char *argv0, struct cut_state *st, sb_u8 c) {
 		cut_state_reset_line(st);
 		return;
 	}
-	if (c == (sb_u8)'\t') {
+	if (c == st->delim) {
 		st->field++;
 		st->at_field_start = 1;
 		st->printing = 0;
@@ -145,10 +136,11 @@ static void cut_feed_byte(const char *argv0, struct cut_state *st, sb_u8 c) {
 	}
 }
 
-static int cut_fd(const char *argv0, sb_i32 fd, const sb_u32 *bits) {
+static int cut_fd(const char *argv0, sb_i32 fd, const sb_u32 *bits, sb_u8 delim) {
 	sb_u8 buf[32768];
 	struct cut_state st;
 	st.bits = bits;
+	st.delim = delim;
 	cut_state_reset_line(&st);
 
 	for (;;) {
@@ -174,6 +166,7 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 	for (sb_u32 j = 0; j < CUT_BITSET_U32S; j++) bits[j] = 0;
 
 	const char *list = 0;
+	sb_u8 delim = (sb_u8)'\t';
 
 	int i = 1;
 	for (; i < argc; i++) {
@@ -192,9 +185,23 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 			i++;
 			continue;
 		}
+		if (sb_streq(a, "-d")) {
+			if (i + 1 >= argc || !argv[i + 1]) cut_die_usage(argv0);
+			const char *d = argv[i + 1];
+			if (!d[0] || d[1]) cut_die_usage(argv0);
+			delim = (sb_u8)d[0];
+			i++;
+			continue;
+		}
 		// Allow -fLIST
 		if (a[1] == 'f' && a[2] != 0) {
 			list = a + 2;
+			continue;
+		}
+		// Allow -dX
+		if (a[1] == 'd' && a[2] != 0) {
+			if (a[3] != 0) cut_die_usage(argv0);
+			delim = (sb_u8)a[2];
 			continue;
 		}
 		cut_die_usage(argv0);
@@ -207,7 +214,7 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 
 	int had_error = 0;
 	if (i >= argc) {
-		(void)cut_fd(argv0, 0, bits);
+		(void)cut_fd(argv0, 0, bits, delim);
 		return 0;
 	}
 
@@ -215,16 +222,16 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 		const char *path = argv[i];
 		if (!path) break;
 		if (sb_streq(path, "-")) {
-			(void)cut_fd(argv0, 0, bits);
+			(void)cut_fd(argv0, 0, bits, delim);
 			continue;
 		}
 		sb_i64 fd = sb_sys_openat(SB_AT_FDCWD, path, SB_O_RDONLY | SB_O_CLOEXEC, 0);
 		if (fd < 0) {
-			cut_print_errno(argv0, path, fd);
+			sb_print_errno(argv0, path, fd);
 			had_error = 1;
 			continue;
 		}
-		(void)cut_fd(argv0, (sb_i32)fd, bits);
+		(void)cut_fd(argv0, (sb_i32)fd, bits, delim);
 		(void)sb_sys_close((sb_i32)fd);
 	}
 

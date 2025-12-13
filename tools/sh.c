@@ -1,5 +1,7 @@
 #include "../src/sb.h"
 
+#define sh_print_errno sb_print_errno
+
 // Minimal syscall-only shell.
 // Subset:
 // - sh [-c CMD] [FILE]
@@ -94,16 +96,6 @@ static void sh_write_err2(const char *argv0, const char *a, const char *b) {
 	(void)sb_write_str(2, "\n");
 }
 
-static void sh_print_errno(const char *argv0, const char *ctx, sb_i64 err_neg) {
-	sb_u64 e = (err_neg < 0) ? (sb_u64)(-err_neg) : (sb_u64)err_neg;
-	(void)sb_write_str(2, argv0);
-	(void)sb_write_str(2, ": ");
-	(void)sb_write_str(2, ctx);
-	(void)sb_write_str(2, ": errno=");
-	sb_write_hex_u64(2, e);
-	(void)sb_write_str(2, "\n");
-}
-
 static int sh_is_name_start(char c) {
 	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_';
 }
@@ -136,18 +128,6 @@ static const char *sh_pos_lookup(const struct sh_ctx *ctx, sb_u32 idx) {
 	if (!ctx) return 0;
 	if (idx >= ctx->posc) return 0;
 	return ctx->posv[idx];
-}
-
-static int sh_parse_u32_dec_n(const char *s, sb_usize n, sb_u32 *out) {
-	if (!s || n == 0 || !out) return -1;
-	sb_u32 v = 0;
-	for (sb_usize i = 0; i < n; i++) {
-		char c = s[i];
-		if (!sh_is_digit(c)) return -1;
-		v = v * 10u + (sb_u32)(c - '0');
-	}
-	*out = v;
-	return 0;
 }
 
 static int sh_append_u64_dec(char *buf, sb_usize buf_sz, sb_usize *ioff, sb_u64 v, const char *argv0) {
@@ -250,7 +230,7 @@ static const char *sh_expand_word(const char *in, struct sh_ctx *ctx, char *buf,
 				dn++;
 			}
 			sb_u32 idx = 0;
-			if (sh_parse_u32_dec_n(ds, dn, &idx) == 0) {
+			if (sb_parse_u32_dec_n(ds, dn, &idx) == 0) {
 				const char *val = sh_pos_lookup(ctx, idx);
 				if (val) {
 					for (sb_usize k = 0; val[k]; k++) {

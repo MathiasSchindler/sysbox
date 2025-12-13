@@ -28,14 +28,10 @@ static sb_i32 sort_cmp_bytes(const sb_u8 *a, sb_u32 alen, const sb_u8 *b, sb_u32
 	return 0;
 }
 
-static int sort_is_space(sb_u8 c) {
-	return (c == (sb_u8)' ' || c == (sb_u8)'\n' || c == (sb_u8)'\t' || c == (sb_u8)'\r' || c == (sb_u8)'\v' || c == (sb_u8)'\f');
-}
-
 static sb_i64 sort_parse_leading_i64(const sb_u8 *s, sb_u32 len) {
 	// Like a minimal "sort -n": skip leading whitespace, parse optional sign + digits.
 	sb_u32 i = 0;
-	while (i < len && sort_is_space(s[i])) {
+	while (i < len && sb_is_space_ascii(s[i])) {
 		i++;
 	}
 	int neg = 0;

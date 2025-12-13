@@ -2,16 +2,6 @@
 
 #define TEE_MAX_OUT 32
 
-static void tee_print_errno(const char *argv0, const char *ctx, sb_i64 err_neg) {
-	sb_u64 e = (err_neg < 0) ? (sb_u64)(-err_neg) : (sb_u64)err_neg;
-	(void)sb_write_str(2, argv0);
-	(void)sb_write_str(2, ": ");
-	(void)sb_write_str(2, ctx);
-	(void)sb_write_str(2, ": errno=");
-	sb_write_hex_u64(2, e);
-	(void)sb_write_str(2, "\n");
-}
-
 static sb_i64 tee_open_out(const char *path, int append) {
 	sb_i32 flags = SB_O_WRONLY | SB_O_CREAT | SB_O_CLOEXEC;
 	if (append) {
@@ -75,7 +65,7 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 		}
 		sb_i64 fd = tee_open_out(path, append);
 		if (fd < 0) {
-			tee_print_errno(argv0, path, fd);
+			sb_print_errno(argv0, path, fd);
 			had_error = 1;
 			continue;
 		}
@@ -104,7 +94,7 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 				if (fd == 1) {
 					sb_die_errno(argv0, "write", w);
 				}
-				tee_print_errno(argv0, out_names[oi], w);
+				sb_print_errno(argv0, out_names[oi], w);
 				had_error = 1;
 				(void)sb_sys_close(fd);
 				out_fds[oi] = -1;

@@ -118,16 +118,6 @@ static int touch_parse_stamp(const char *s, sb_i32 *out_year, sb_u32 *out_mon, s
 	return 0;
 }
 
-static void touch_print_err(const char *argv0, const char *path, sb_i64 err_neg) {
-	sb_u64 e = (err_neg < 0) ? (sb_u64)(-err_neg) : (sb_u64)err_neg;
-	(void)sb_write_str(2, argv0);
-	(void)sb_write_str(2, ": ");
-	(void)sb_write_str(2, path);
-	(void)sb_write_str(2, ": errno=");
-	sb_write_hex_u64(2, e);
-	(void)sb_write_str(2, "\n");
-}
-
 __attribute__((used)) int main(int argc, char **argv, char **envp) {
 	(void)envp;
 
@@ -209,7 +199,7 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 			SB_O_WRONLY | SB_O_CREAT | SB_O_CLOEXEC,
 			0666);
 		if (fd < 0) {
-			touch_print_err(argv0, path, fd);
+			sb_print_errno(argv0, path, fd);
 			any_fail = 1;
 			continue;
 		}
@@ -217,7 +207,7 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 
 		sb_i64 ur = sb_sys_utimensat(SB_AT_FDCWD, path, times, 0);
 		if (ur < 0) {
-			touch_print_err(argv0, path, ur);
+			sb_print_errno(argv0, path, ur);
 			any_fail = 1;
 			continue;
 		}

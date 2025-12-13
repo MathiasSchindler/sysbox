@@ -1,19 +1,5 @@
 #include "../src/sb.h"
 
-static void wc_print_err(const char *argv0, const char *path, sb_i64 err_neg) {
-	sb_u64 e = (err_neg < 0) ? (sb_u64)(-err_neg) : (sb_u64)err_neg;
-	(void)sb_write_str(2, argv0);
-	(void)sb_write_str(2, ": ");
-	(void)sb_write_str(2, path);
-	(void)sb_write_str(2, ": errno=");
-	sb_write_hex_u64(2, e);
-	(void)sb_write_str(2, "\n");
-}
-
-static int wc_is_space(sb_u8 c) {
-	return (c == (sb_u8)' ' || c == (sb_u8)'\n' || c == (sb_u8)'\t' || c == (sb_u8)'\r' || c == (sb_u8)'\v' || c == (sb_u8)'\f');
-}
-
 static sb_i32 wc_fd(sb_i32 fd, sb_u64 *out_lines, sb_u64 *out_words, sb_u64 *out_bytes) {
 	sb_u8 buf[32768];
 	sb_u64 lines = 0;
@@ -34,7 +20,7 @@ static sb_i32 wc_fd(sb_i32 fd, sb_u64 *out_lines, sb_u64 *out_words, sb_u64 *out
 			if (c == (sb_u8)'\n') {
 				lines++;
 			}
-			if (wc_is_space(c)) {
+			if (sb_is_space_ascii(c)) {
 				in_word = 0;
 			} else {
 				if (!in_word) {
@@ -58,14 +44,14 @@ static int wc_path(const char *argv0, const char *path, sb_u64 *out_lines, sb_u6
 
 	sb_i64 fd = sb_sys_openat(SB_AT_FDCWD, path, SB_O_RDONLY | SB_O_CLOEXEC, 0);
 	if (fd < 0) {
-		wc_print_err(argv0, path, fd);
+		sb_print_errno(argv0, path, fd);
 		return 1;
 	}
 
 	sb_i32 rr = wc_fd((sb_i32)fd, out_lines, out_words, out_bytes);
 	(void)sb_sys_close((sb_i32)fd);
 	if (rr < 0) {
-		wc_print_err(argv0, path, (sb_i64)rr);
+		sb_print_errno(argv0, path, (sb_i64)rr);
 		return 1;
 	}
 	return 0;
@@ -160,7 +146,7 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 		sb_u64 lines = 0, words = 0, bytes = 0;
 		sb_i32 rr = wc_fd(0, &lines, &words, &bytes);
 		if (rr < 0) {
-			wc_print_err(argv0, "stdin", (sb_i64)rr);
+			sb_print_errno(argv0, "stdin", (sb_i64)rr);
 			return 1;
 		}
 		if (wc_write_counts(argv0, lines, words, bytes, show_lines, show_words, show_bytes, "", 0) != 0) {
