@@ -45,6 +45,7 @@ typedef unsigned char sb_u8;
 #define SB_SYS_pipe2 293
 #define SB_SYS_dup2 33
 #define SB_SYS_chdir 80
+#define SB_SYS_mount 165
 #define SB_SYS_statfs 137
 #define SB_SYS_rt_sigaction 13
 #define SB_SYS_utimensat 280
@@ -361,6 +362,10 @@ SB_INLINE sb_i64 sb_sys_pipe2(sb_i32 pipefd[2], sb_i32 flags) {
 
 SB_INLINE sb_i64 sb_sys_dup2(sb_i32 oldfd, sb_i32 newfd) {
 	return sb_syscall2(SB_SYS_dup2, (sb_i64)oldfd, (sb_i64)newfd);
+}
+
+SB_INLINE sb_i64 sb_sys_mount(const char *source, const char *target, const char *filesystemtype, sb_u64 mountflags, const void *data) {
+	return sb_syscall5(SB_SYS_mount, (sb_i64)source, (sb_i64)target, (sb_i64)filesystemtype, (sb_i64)mountflags, (sb_i64)data);
 }
 
 SB_INLINE sb_i64 sb_sys_chdir(const char *path) {

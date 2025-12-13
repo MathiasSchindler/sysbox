@@ -49,9 +49,10 @@ endif
 RUNTIME_OBJ := $(BUILD_DIR)/sb_start.o
 LIB_OBJ := $(BUILD_DIR)/sb.o
 
-TOOLS := true false echo cat pwd ls wc mkdir rmdir rm mv cp head tail sort uniq tee tr cut date sleep ln readlink basename dirname touch chmod chown printf yes seq uname stat df test grep kill id which xargs whoami du clear hostname nproc env sed awk find sh cmp diff ps who time
+TOOLS := true false echo cat pwd ls wc mkdir rmdir rm mv cp head tail sort uniq tee tr cut date sleep ln readlink basename dirname touch chmod chown printf yes seq uname stat df test grep kill id which xargs whoami du clear hostname nproc env sed awk find sh cmp diff ps who time init \
+	uptime free mount strings rev column col more watch hexdump
 
-.PHONY: all clean test tiny size size-short size-report size-report-short
+.PHONY: all clean test tiny size size-short size-report size-report-short initramfs initramfs-clean
 
 SIZE_LINES ?= 200
 
@@ -83,6 +84,23 @@ clean:
 
 test: all
 	sh tests/run.sh
+
+# Build a minimal initramfs containing sysbox tools.
+# Produces: build/sysbox-initramfs.igz
+# Staging rootfs is placed under: build/initramfs-root/
+INITRAMFS_ROOT := $(BUILD_DIR)/initramfs-root
+INITRAMFS_OUT := $(BUILD_DIR)/sysbox-initramfs.igz
+
+initramfs: all
+	rm -rf $(INITRAMFS_ROOT)
+	mkdir -p $(INITRAMFS_ROOT)/bin $(INITRAMFS_ROOT)/dev $(INITRAMFS_ROOT)/proc $(INITRAMFS_ROOT)/sys
+	cp -a $(BIN_DIR)/* $(INITRAMFS_ROOT)/bin/
+	cp -a $(BIN_DIR)/init $(INITRAMFS_ROOT)/init
+	(cd $(INITRAMFS_ROOT) && find . -print0 | cpio --quiet --null -o --format=newc) | gzip -9 > $(INITRAMFS_OUT)
+	@echo "Wrote $(INITRAMFS_OUT)"
+
+initramfs-clean:
+	rm -rf $(INITRAMFS_ROOT) $(INITRAMFS_OUT)
 
 # Optional post-link shrinking: removes section headers (impacts tooling like readelf -S, size -A).
 .PHONY: tiny

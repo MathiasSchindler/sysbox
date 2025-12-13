@@ -18,6 +18,10 @@ static void write_type(sb_u32 mode) {
 		(void)sb_write_str(1, "dir");
 		return;
 	}
+	if (t == SB_S_IFLNK) {
+		(void)sb_write_str(1, "lnk");
+		return;
+	}
 	(void)sb_write_str(1, "other");
 }
 
@@ -35,12 +39,35 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 	(void)envp;
 	const char *argv0 = (argc > 0 && argv && argv[0]) ? argv[0] : "stat";
 
-	if (argc < 2) {
-		sb_die_usage(argv0, "stat FILE...");
+	int nofollow = 0;
+	int i = 1;
+	for (; i < argc; i++) {
+		const char *a = argv[i];
+		if (!a) break;
+		if (sb_streq(a, "--")) {
+			i++;
+			break;
+		}
+		if (a[0] != '-' || sb_streq(a, "-")) {
+			break;
+		}
+		if (sb_streq(a, "-l")) {
+			nofollow = 1;
+			continue;
+		}
+		if (sb_streq(a, "-L")) {
+			nofollow = 0;
+			continue;
+		}
+		sb_die_usage(argv0, "stat [-l|-L] FILE...");
+	}
+
+	if (i >= argc) {
+		sb_die_usage(argv0, "stat [-l|-L] FILE...");
 	}
 
 	int rc = 0;
-	for (int i = 1; i < argc; i++) {
+	for (; i < argc; i++) {
 		const char *path = argv[i];
 		if (!path || sb_streq(path, "--")) {
 			continue;
@@ -48,7 +75,7 @@ __attribute__((used)) int main(int argc, char **argv, char **envp) {
 
 		struct sb_stat st;
 		// Use newfstatat to avoid blocking on special files (e.g. FIFOs) while still following symlinks.
-		sb_i64 r = sb_sys_newfstatat(SB_AT_FDCWD, path, &st, 0);
+		sb_i64 r = sb_sys_newfstatat(SB_AT_FDCWD, path, &st, nofollow ? SB_AT_SYMLINK_NOFOLLOW : 0);
 		if (r < 0) {
 			warn_errno(argv0, path, r);
 			rc = 1;

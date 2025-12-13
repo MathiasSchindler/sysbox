@@ -75,6 +75,17 @@ mark "setup"
 [ -x "$BIN/find" ] || fail "missing $BIN/find (build first)"
 [ -x "$BIN/sh" ] || fail "missing $BIN/sh (build first)"
 
+[ -x "$BIN/uptime" ] || fail "missing $BIN/uptime (build first)"
+[ -x "$BIN/free" ] || fail "missing $BIN/free (build first)"
+[ -x "$BIN/mount" ] || fail "missing $BIN/mount (build first)"
+[ -x "$BIN/strings" ] || fail "missing $BIN/strings (build first)"
+[ -x "$BIN/rev" ] || fail "missing $BIN/rev (build first)"
+[ -x "$BIN/column" ] || fail "missing $BIN/column (build first)"
+[ -x "$BIN/col" ] || fail "missing $BIN/col (build first)"
+[ -x "$BIN/more" ] || fail "missing $BIN/more (build first)"
+[ -x "$BIN/watch" ] || fail "missing $BIN/watch (build first)"
+[ -x "$BIN/hexdump" ] || fail "missing $BIN/hexdump (build first)"
+
 # --- true/false: exit codes ---
 set +e
 $BIN/true >/dev/null 2>&1
@@ -931,6 +942,73 @@ OUT=$($BIN/clear)
 EXP=$(printf '\033[H\033[2J')
 [ "$OUT" = "$EXP" ] || fail "clear unexpected output"
 
+# --- uptime/free/mount: basic output exists ---
+mark "uptime/free/mount"
+OUT=$($BIN/uptime)
+case "$OUT" in
+  "up "*) : ;;
+  *) fail "uptime should start with 'up ' (got '$OUT')" ;;
+esac
+
+OUT=$($BIN/free)
+OUT1=$(printf '%s\n' "$OUT" | $BIN/head -n 1)
+OUT2=$(printf '%s\n' "$OUT" | $BIN/head -n 2 | $BIN/tail -n 1)
+case "$OUT1" in
+  "mem	"*) : ;;
+  *) fail "free should start with 'mem\\t' (got '$OUT')" ;;
+esac
+case "$OUT2" in
+  "swap	"*) : ;;
+  *) fail "free should include swap line" ;;
+esac
+
+OUT=$($BIN/mount | $BIN/head -n 1)
+[ -n "$OUT" ] || fail "mount should print at least one line"
+
+# --- strings: extracts printable runs ---
+mark "strings"
+STRF="$TMP/strings_in"
+printf 'xx\0hello\0yy' >"$STRF"
+OUT=$($BIN/strings "$STRF")
+[ "$OUT" = "hello" ] || fail "strings unexpected output: '$OUT'"
+
+OUT=$($BIN/strings -n 3 "$STRF")
+[ "$OUT" = "hello" ] || fail "strings -n unexpected output: '$OUT'"
+
+set +e
+$BIN/strings -n 0 "$STRF" >/dev/null 2>&1
+RC=$?
+set -e
+[ $RC -eq 2 ] || fail "strings -n 0 should be usage error (got $RC)"
+
+# --- rev: reverse bytes per line ---
+mark "rev"
+OUT=$(printf 'abc\n123\n' | $BIN/rev)
+EXP=$(printf 'cba\n321')
+[ "$OUT" = "$EXP" ] || fail "rev unexpected output: '$OUT'"
+
+# --- column: align whitespace-delimited fields ---
+mark "column"
+OUT=$(printf 'a bb\nccc d\n' | $BIN/column)
+# Expect stable alignment (at least one space between columns).
+printf '%s' "$OUT" | grep -Eq '^a +bb$' || fail "column line1 unexpected: '$OUT'"
+printf '%s' "$OUT" | grep -Eq '^ccc +d$' || fail "column line2 unexpected: '$OUT'"
+
+# --- col: handle backspace and carriage return ---
+mark "col"
+OUT=$(printf 'ab\bc\n' | $BIN/col)
+[ "$OUT" = "ac" ] || fail "col backspace unexpected: '$OUT'"
+OUT=$(printf 'hello\rY\n' | $BIN/col)
+[ "$OUT" = "Yello" ] || fail "col carriage return unexpected: '$OUT'"
+
+# --- hexdump: stable line format (basic) ---
+mark "hexdump"
+HX="$TMP/hexdump_in"
+printf 'ABC' >"$HX"
+OUT=$($BIN/hexdump "$HX" | $BIN/head -n 1)
+printf '%s' "$OUT" | $BIN/grep -q '41 42 43' || fail "hexdump should contain hex bytes (got '$OUT')"
+printf '%s' "$OUT" | $BIN/grep -q '|ABC' || fail "hexdump should contain ASCII gutter (got '$OUT')"
+
 # --- env: print environment and execute with modified env ---
 mark "env"
 $BIN/env | grep -q '^PATH=' || fail "env output missing PATH= entry"
@@ -1080,6 +1158,13 @@ case "$OUT" in
   (*) fail "stat symlink should follow and report regular file: '$OUT'" ;;
 esac
 
+LNKLEN=$(stat -c %s "$TMP/stat-link")
+OUT=$($BIN/stat -l "$TMP/stat-link")
+case "$OUT" in
+  (*"type=lnk"*"size=$LNKLEN"*) : ;;
+  (*) fail "stat -l should lstat and report symlink: '$OUT'" ;;
+esac
+
 if command -v mkfifo >/dev/null 2>&1; then
   mkfifo "$TMP/stat-fifo"
   OUT=$($BIN/stat "$TMP/stat-fifo")
@@ -1104,6 +1189,25 @@ set -- $OUT
 case "$2" in (""|*[!0-9]*) fail "df(.) total not numeric: '$OUT'" ;; esac
 case "$3" in (""|*[!0-9]*) fail "df(.) used not numeric: '$OUT'" ;; esac
 case "$4" in (""|*[!0-9]*) fail "df(.) avail not numeric: '$OUT'" ;; esac
+
+OUT=$($BIN/df -h "$TMP")
+set -- $OUT
+[ "$1" = "$TMP" ] || fail "df -h did not echo path as first field: '$OUT'"
+case "$2" in ([0-9]*|[0-9]*[KMGTP]) : ;; (*) fail "df -h total not human-ish: '$OUT'" ;; esac
+case "$3" in ([0-9]*|[0-9]*[KMGTP]) : ;; (*) fail "df -h used not human-ish: '$OUT'" ;; esac
+case "$4" in ([0-9]*|[0-9]*[KMGTP]) : ;; (*) fail "df -h avail not human-ish: '$OUT'" ;; esac
+
+OUT=$($BIN/df -T "$TMP")
+set -- $OUT
+[ "$1" = "$TMP" ] || fail "df -T did not echo path as first field: '$OUT'"
+T5=$5
+case "$T5" in
+  0x*) T5=${T5#0x} ;;
+esac
+case "$T5" in (""|*[!0-9a-fA-F]*) fail "df -T type not hex: '$OUT'" ;; esac
+
+OUT=$($BIN/df -H "$TMP" | $BIN/head -n 1)
+[ "$OUT" = "path	total	used	avail" ] || fail "df -H header unexpected: '$OUT'"
 
 set +e
 $BIN/df "$TMP/does-not-exist" >"$TMP/out" 2>"$TMP/err"
@@ -1297,5 +1401,9 @@ echo "$OUT" | grep -Fq "$LSR/root/linkdir:" && fail "ls -R should not recurse in
 
 OUT=$($BIN/ls -aR "$LSR/root")
 echo "$OUT" | grep -q "^\\.hfile$" || fail "ls -aR missing hidden file"
+
+# --- integration: run pipelines/redirects using sysbox sh + sysbox tools only ---
+mark "integration"
+sh "$ROOT_DIR/tests/integration.sh" "$BIN" "$TMP" || fail "integration suite failed"
 
 echo "OK"

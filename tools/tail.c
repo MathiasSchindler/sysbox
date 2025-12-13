@@ -206,6 +206,81 @@ static int tail_fd(const char *argv0, sb_i32 fd, sb_u64 nlines) {
 	return 0;
 }
 
+// Seek-based tail -n for regular files: scan backwards for N newlines, then stream forward.
+// Returns 0 on success, 1 if the fd is not seekable (ESPIPE).
+static int tail_fd_lines_seek(const char *argv0, sb_i32 fd, sb_u64 nlines) {
+	if (nlines == 0) return 0;
+
+	sb_i64 end = sb_sys_lseek(fd, 0, SB_SEEK_END);
+	if (end < 0) {
+		if ((sb_u64)(-end) == (sb_u64)SB_ESPIPE) return 1;
+		sb_die_errno(argv0, "lseek", end);
+	}
+	if (end == 0) return 0;
+
+	int ignore_trailing_nl = 0;
+	{
+		sb_u8 last = 0;
+		sb_i64 sr = sb_sys_lseek(fd, end - 1, SB_SEEK_SET);
+		if (sr < 0) sb_die_errno(argv0, "lseek", sr);
+		sb_i64 rr = sb_sys_read(fd, &last, 1);
+		if (rr < 0) sb_die_errno(argv0, "read", rr);
+		if (rr == 1 && last == (sb_u8)'\n') ignore_trailing_nl = 1;
+	}
+
+	sb_u8 buf[32768];
+	sb_i64 pos = end;
+	sb_u64 found = 0;
+	sb_i64 start = 0;
+
+	while (pos > 0 && found < nlines) {
+		sb_i64 step = (pos > (sb_i64)sizeof(buf)) ? (sb_i64)sizeof(buf) : pos;
+		pos -= step;
+
+		sb_i64 sr = sb_sys_lseek(fd, pos, SB_SEEK_SET);
+		if (sr < 0) sb_die_errno(argv0, "lseek", sr);
+
+		sb_i64 r = sb_sys_read(fd, buf, (sb_usize)step);
+		if (r < 0) sb_die_errno(argv0, "read", r);
+		if (r == 0) break;
+
+		for (sb_i64 i = r - 1; i >= 0; i--) {
+			sb_i64 abs = pos + i;
+			if (ignore_trailing_nl && abs == end - 1) {
+				continue;
+			}
+			if (buf[(sb_usize)i] == (sb_u8)'\n') {
+				found++;
+				if (found == nlines) {
+					start = abs + 1;
+					pos = 0;
+					break;
+				}
+			}
+		}
+	}
+
+	if (found < nlines) {
+		start = 0;
+	}
+
+	// Stream from start to end.
+	{
+		sb_i64 sr = sb_sys_lseek(fd, start, SB_SEEK_SET);
+		if (sr < 0) sb_die_errno(argv0, "lseek", sr);
+
+		for (;;) {
+			sb_i64 r = sb_sys_read(fd, buf, (sb_usize)sizeof(buf));
+			if (r < 0) sb_die_errno(argv0, "read", r);
+			if (r == 0) break;
+			sb_i64 w = sb_write_all(1, buf, (sb_usize)r);
+			if (w < 0) sb_die_errno(argv0, "write", w);
+		}
+	}
+
+	return 0;
+}
+
 static int tail_fd_bytes(const char *argv0, sb_i32 fd, sb_u64 nbytes) {
 	if (nbytes == 0) return 0;
 
@@ -263,8 +338,14 @@ static int tail_path(const char *argv0, const char *path, int bytes_mode, sb_u64
 	if (fd < 0) {
 		sb_die_errno(argv0, path, fd);
 	}
-	if (bytes_mode) (void)tail_fd_bytes(argv0, (sb_i32)fd, n);
-	else (void)tail_fd(argv0, (sb_i32)fd, n);
+	if (bytes_mode) {
+		(void)tail_fd_bytes(argv0, (sb_i32)fd, n);
+	} else {
+		int seek_rc = tail_fd_lines_seek(argv0, (sb_i32)fd, n);
+		if (seek_rc == 1) {
+			(void)tail_fd(argv0, (sb_i32)fd, n);
+		}
+	}
 	(void)sb_sys_close((sb_i32)fd);
 	return 0;
 }
