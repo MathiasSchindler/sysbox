@@ -1,3 +1,0 @@
-port=8080
-mode=dev
-feature_x=0

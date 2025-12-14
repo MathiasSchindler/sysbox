@@ -1,5 +1,0 @@
-INFO start
-ERROR disk full
-INFO retry
-ERROR network down
-INFO end
